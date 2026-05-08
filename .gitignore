@@ -1,0 +1,19 @@
+# KiCad
+*.bak
+*.kicad_pcb-bak
+*.kicad_sch-bak
+*_old
+fp-info-cache
+/hardware/_autosave-*
+/hardware/*.lck
+
+# PlatformIO
+.pio
+.vscode
+*.o
+*.elf
+*.bin
+
+# OS
+.DS_Store
+Thumbs.db
