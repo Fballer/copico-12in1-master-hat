@@ -1,0 +1,13 @@
+#ifndef EMULATOR_MODE_H
+#define EMULATOR_MODE_H
+
+enum EmulatorMode {
+    MODE_BOOT_MENU,
+    MODE_ORCH90,
+    MODE_SPEECH_SOUND,
+    MODE_RS232_PAK_LEGACY,
+    MODE_RS232_PAK_TURBO,
+    MODE_WORDPAK2
+};
+
+#endif // EMULATOR_MODE_H

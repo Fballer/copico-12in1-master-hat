@@ -8,6 +8,8 @@
 #include "acia6551.h"
 #include "v9958.h"
 #include "vga_driver.h"
+#include "emulator_mode.h"
+#include "boot_menu.h"
 
 // Hardware Pin Definitions
 #define PIN_E_CLOCK 21
@@ -30,14 +32,10 @@ uint8_t dac_right = 128;
 I2S i2s(OUTPUT);
 
 // Mode Selection
-enum EmulatorMode {
-    MODE_ORCH90,
-    MODE_SPEECH_SOUND,
-    MODE_RS232_PAK_LEGACY,
-    MODE_RS232_PAK_TURBO,
-    MODE_WORDPAK2
-};
-EmulatorMode current_mode = MODE_WORDPAK2; // Phase 4 testing
+EmulatorMode current_mode = MODE_BOOT_MENU;
+
+// Boot Menu instance
+BootMenu boot_menu;
 
 // RS-232 Hardware UART Pins (via SerialPIO to map to any GPIO)
 SerialPIO rs232_serial(13, 15, 256); // TX=G13, RX=G15, 256-byte FIFO
@@ -48,11 +46,15 @@ Acia6551 acia(&rs232_serial);
 V9958 v9958;
 VgaDriver vga_driver(&v9958);
 
-// Function prototype
+// Function prototypes
 void update_orch90_audio();
+void switch_mode(EmulatorMode new_mode);
 
 void setup() {
     Serial.begin(115200);
+#ifdef PICO_DEFAULT_LED_PIN
+    pinMode(PICO_DEFAULT_LED_PIN, OUTPUT);
+#endif
     
     // 1. Initialize I2S DAC (PCM5102A)
     i2s.setBCLK(I2S_BCK);
@@ -85,17 +87,8 @@ void setup() {
     // 6. Start both state machines synchronously
     pio_enable_sm_mask_in_sync(pio, (1u << sm_addr) | (1u << sm_data));
 
-    // 7. Initialize RS-232 Emulation
-    if (current_mode == MODE_RS232_PAK_LEGACY) {
-        acia.init(false);
-    } else if (current_mode == MODE_RS232_PAK_TURBO) {
-        acia.init(true);
-    }
-    
-    // 8. Initialize VGA Driver
-    if (current_mode == MODE_WORDPAK2) {
-        vga_driver.init();
-    }
+    // 7. Delegate initial peripheral setup
+    switch_mode(current_mode);
 }
 
 void loop() {
@@ -111,6 +104,12 @@ void loop() {
         i2s.write(sample_r);
     } else if (current_mode == MODE_WORDPAK2) {
         vga_driver.tick();
+    } else if (current_mode == MODE_BOOT_MENU) {
+        // Heartbeat LED
+#ifdef PICO_DEFAULT_LED_PIN
+        digitalWrite(PICO_DEFAULT_LED_PIN, (millis() / 500) % 2);
+#endif
+        delay(10);
     } else {
         delay(1);
     }
@@ -130,7 +129,19 @@ void loop1() {
 
         if (is_read) {
             // Read Cycle Logic
-            if (current_mode == MODE_SPEECH_SOUND && addr == 0xFF7E) {
+            if (current_mode == MODE_BOOT_MENU && addr >= 0xC000 && addr <= 0xDFFF) {
+                uint8_t data_out = boot_menu.read_rom(addr);
+                gpio_set_dir_out_masked(0xFF);
+                gpio_put_masked(0xFF, data_out);
+                while (gpio_get(PIN_E_CLOCK)) {}
+                gpio_set_dir_in_masked(0xFF);
+            } else if (addr == 0xFF7F) {
+                // Readback for current mode (Trigger Port)
+                gpio_set_dir_out_masked(0xFF);
+                gpio_put_masked(0xFF, (uint8_t)current_mode);
+                while (gpio_get(PIN_E_CLOCK)) {}
+                gpio_set_dir_in_masked(0xFF);
+            } else if (current_mode == MODE_SPEECH_SOUND && addr == 0xFF7E) {
                 uint8_t status = pic7040.read_status();
                 
                 // Turn around data bus (GPIO 0-7)
@@ -164,6 +175,10 @@ void loop1() {
             }
         } else {
             // Write Cycle Logic
+            if (addr == 0xFF7F) {
+                switch_mode((EmulatorMode)data);
+                return;
+            }
             switch (current_mode) {
                 case MODE_ORCH90:
                     if (addr == 0xFF7A) {
@@ -214,4 +229,38 @@ void update_orch90_audio() {
     // Push to I2S DAC
     i2s.write(sample_l);
     i2s.write(sample_r);
+}
+
+void switch_mode(EmulatorMode new_mode) {
+    if (current_mode == new_mode) return;
+    
+    Serial.print("Switching mode from ");
+    Serial.print(current_mode);
+    Serial.print(" to ");
+    Serial.println(new_mode);
+    
+    // 1. Cleanup old mode
+    // (We keep the core bus sniffers running, but could add peripheral cleanup here)
+    
+    current_mode = new_mode;
+    
+    // 2. Initialize new mode
+    switch (current_mode) {
+        case MODE_BOOT_MENU:
+            boot_menu.init();
+            break;
+        case MODE_RS232_PAK_LEGACY:
+            acia.init(false);
+            break;
+        case MODE_RS232_PAK_TURBO:
+            acia.init(true);
+            break;
+        case MODE_WORDPAK2:
+            vga_driver.init();
+            break;
+        case MODE_ORCH90:
+        case MODE_SPEECH_SOUND:
+            // No specific init required
+            break;
+    }
 }
