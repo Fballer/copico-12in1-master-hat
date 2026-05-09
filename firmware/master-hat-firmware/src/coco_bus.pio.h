@@ -13,23 +13,22 @@
 // ----------------- //
 
 #define coco_sniffer_addr_wrap_target 0
-#define coco_sniffer_addr_wrap 4
+#define coco_sniffer_addr_wrap 3
 #define coco_sniffer_addr_pio_version 0
 
 static const uint16_t coco_sniffer_addr_program_instructions[] = {
             //     .wrap_target
     0x2095, //  0: wait   1 gpio, 21
-    0x00c4, //  1: jmp    pin, 4
-    0x4010, //  2: in     pins, 16
-    0x8000, //  3: push   noblock
-    0x2015, //  4: wait   0 gpio, 21
+    0x4010, //  1: in     pins, 16
+    0x8000, //  2: push   noblock
+    0x2015, //  3: wait   0 gpio, 21
             //     .wrap
 };
 
 #if !PICO_NO_HARDWARE
 static const struct pio_program coco_sniffer_addr_program = {
     .instructions = coco_sniffer_addr_program_instructions,
-    .length = 5,
+    .length = 4,
     .origin = -1,
     .pio_version = coco_sniffer_addr_pio_version,
 #if PICO_PIO_VERSION > 0
@@ -49,23 +48,22 @@ static inline pio_sm_config coco_sniffer_addr_program_get_default_config(uint of
 // ----------------- //
 
 #define coco_sniffer_data_wrap_target 0
-#define coco_sniffer_data_wrap 4
+#define coco_sniffer_data_wrap 3
 #define coco_sniffer_data_pio_version 0
 
 static const uint16_t coco_sniffer_data_program_instructions[] = {
             //     .wrap_target
     0x2095, //  0: wait   1 gpio, 21
-    0x00c4, //  1: jmp    pin, 4
-    0x4008, //  2: in     pins, 8
-    0x8000, //  3: push   noblock
-    0x2015, //  4: wait   0 gpio, 21
+    0x4008, //  1: in     pins, 8
+    0x8000, //  2: push   noblock
+    0x2015, //  3: wait   0 gpio, 21
             //     .wrap
 };
 
 #if !PICO_NO_HARDWARE
 static const struct pio_program coco_sniffer_data_program = {
     .instructions = coco_sniffer_data_program_instructions,
-    .length = 5,
+    .length = 4,
     .origin = -1,
     .pio_version = coco_sniffer_data_pio_version,
 #if PICO_PIO_VERSION > 0

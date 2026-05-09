@@ -1,0 +1,57 @@
+; vga_pio.pio
+; VGA PIO implementation for RP2350 (640x480 @ 60Hz)
+
+.program vga_hsync
+    ; HSYNC at 25MHz
+    pull block              ; Pull active + front porch (640 + 16 - 2 = 654)
+.wrap_target
+    mov x, osr              ; 1 cycle
+activeporch:
+    jmp x-- activeporch     ; x+1 cycles. Total = 656 cycles
+pulse:
+    set pins, 0 [31]        ; 32 cycles
+    set pins, 0 [31]        ; 32 cycles
+    set pins, 0 [31]        ; 32 cycles -> 96 cycles total
+backporch:
+    set pins, 1 [31]        ; 32 cycles
+    set pins, 1 [13]        ; 14 cycles
+    irq 0 [1]               ; 2 cycles -> 48 cycles total
+.wrap
+
+.program vga_vsync
+.side_set 1 opt
+    ; VSYNC at 25MHz
+    pull block              ; Pull 479 (480 lines active)
+.wrap_target
+    mov x, osr
+active:
+    wait 1 irq 0            ; Wait for end of HSYNC line
+    irq 1                   ; Signal RGB PIO to start line
+    jmp x-- active
+    set y, 9                ; 10 lines front porch
+frontporch:
+    wait 1 irq 0
+    jmp y-- frontporch
+    set pins, 0             ; Set VSYNC low (sync pulse)
+    wait 1 irq 0            ; Wait 1 line
+    wait 1 irq 0            ; Wait 2 lines
+    set y, 31               ; 32 lines back porch (33rd is the first active line)
+backporch:
+    wait 1 irq 0 side 1     ; Set VSYNC high
+    jmp y-- backporch
+.wrap
+
+.program vga_rgb
+.side_set 1
+    ; RGB at 250MHz (10 cycles per pixel)
+    pull block side 0
+    mov y, osr side 0              ; Pull 639 (640 pixels - 1)
+.wrap_target
+    mov x, y side 0
+    set pins, 0 side 0      ; Zero RGB pins in blanking
+    wait 1 irq 1 side 0            ; Wait for VSYNC active mode line
+colorout:
+    out exec, 16 side 0            ; [1] Pull 16-bit instruction and execute
+                            ; Executed instruction (set pins, data side data [7]) takes 8 cycles
+    jmp x-- colorout side 0        ; [1] Loop 640 times. Total = 10 cycles per pixel
+.wrap
