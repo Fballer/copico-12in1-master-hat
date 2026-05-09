@@ -1,0 +1,25 @@
+.program coco_sniffer_addr
+; Reads the 16-bit Address Bus during a Write Cycle
+; in_base = 32 (A0-A15)
+; jmp_pin = 20 (R/W)
+.wrap_target
+    wait 1 gpio 21      ; Wait for E-clock HIGH
+    jmp pin skip        ; If R/W is HIGH (Read), skip this cycle
+    in pins, 16         ; Read A0-A15
+    push noblock        ; Push address to CPU
+skip:
+    wait 0 gpio 21      ; Wait for E-clock LOW to complete cycle
+.wrap
+
+.program coco_sniffer_data
+; Reads the 8-bit Data Bus during a Write Cycle
+; in_base = 0 (D0-D7)
+; jmp_pin = 20 (R/W)
+.wrap_target
+    wait 1 gpio 21      ; Wait for E-clock HIGH
+    jmp pin skip        ; If R/W is HIGH (Read), skip this cycle
+    in pins, 8          ; Read D0-D7
+    push noblock        ; Push data to CPU
+skip:
+    wait 0 gpio 21      ; Wait for E-clock LOW to complete cycle
+.wrap
