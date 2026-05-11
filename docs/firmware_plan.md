@@ -65,6 +65,10 @@ We will develop each module in isolation, hardcoding the RP2350 for testing befo
 
 ## 4. Boot Menu & ROM Management
 *   **Native VDG Menu**: The primary menu runs on the CoCo's original green/black screen.
+*   **BIOS Shared Memory**: The RP2350 exposes a shared memory block starting at `$C800` for the 6809 to read real-time status strings dynamically injected by the ESP32 and RP2350:
+    *   `$C800`: WiFi Status (max 32 bytes, null-terminated)
+    *   `$C820`: ESP32 Firmware Version (max 32 bytes, null-terminated)
+    *   `$C840`: SD Card Status (max 32 bytes, null-terminated)
 *   **WiFi Soft-Reset**: On boot/reset, the RP2350 sends a high-priority "System Reset" command via SPI to the ESP32 to ensure synchronized initialization (Software Handshake).
 *   **Personality Swapping**: Selecting a menu item triggers a "hot-swap" of the RP2350's memory mapping.
 

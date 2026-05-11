@@ -1,10 +1,10 @@
 #include "esp32_bridge.h"
 
-// Define the SPI pins (From Phase 10 Refactor)
-#define BRIDGE_MISO 24
-#define BRIDGE_SCK  30
-#define BRIDGE_MOSI 31
-#define BRIDGE_CS   23
+// Define the SPI pins (From Phase 10 Refactor / Phase 7 Build Guide)
+#define BRIDGE_MISO 23
+#define BRIDGE_MOSI 24
+#define BRIDGE_CS   26
+#define BRIDGE_SCK  28
 
 Esp32Bridge esp32;
 
@@ -15,11 +15,11 @@ void Esp32Bridge::init() {
     pinMode(BRIDGE_CS, OUTPUT);
     digitalWrite(BRIDGE_CS, HIGH);
 
-    // Initialize SPI1 hardware on RP2350
-    SPI1.setRX(BRIDGE_MISO);
-    SPI1.setSCK(BRIDGE_SCK);
-    SPI1.setTX(BRIDGE_MOSI);
-    SPI1.begin();
+    // Initialize SPI hardware on RP2350
+    SPI.setRX(BRIDGE_MISO);
+    SPI.setSCK(BRIDGE_SCK);
+    SPI.setTX(BRIDGE_MOSI);
+    SPI.begin();
 }
 
 void Esp32Bridge::transfer(const uint8_t* tx_buf, uint8_t* rx_buf, size_t len) {
@@ -28,7 +28,7 @@ void Esp32Bridge::transfer(const uint8_t* tx_buf, uint8_t* rx_buf, size_t len) {
     delayMicroseconds(5); 
     
     for (size_t i = 0; i < len; i++) {
-        rx_buf[i] = SPI1.transfer(tx_buf[i]);
+        rx_buf[i] = SPI.transfer(tx_buf[i]);
     }
     
     digitalWrite(BRIDGE_CS, HIGH);
