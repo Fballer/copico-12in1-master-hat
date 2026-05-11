@@ -1,6 +1,6 @@
 #include "acia6551.h"
 
-Acia6551::Acia6551(SerialPIO* serial) : _serial(serial) {
+Acia6551::Acia6551(Stream* serial) : _serial(serial) {
     _turbo_mode = false;
     _command_reg = 0x00;
     _control_reg = 0x00;
@@ -19,13 +19,13 @@ void Acia6551::set_turbo_mode(bool turbo_mode) {
 }
 
 void Acia6551::update_baud_rate() {
-    if (_turbo_mode) {
-        _serial->begin(115200);
-    } else {
-        uint32_t baud = get_baud_rate_from_control();
-        if (baud > 0) {
-            _serial->begin(baud);
-        }
+    uint32_t baud = 115200;
+    if (!_turbo_mode) {
+        baud = get_baud_rate_from_control();
+    }
+    
+    if (_baud_callback && baud > 0) {
+        _baud_callback(baud);
     }
 }
 

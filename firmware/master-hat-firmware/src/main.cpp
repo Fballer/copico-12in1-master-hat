@@ -10,10 +10,14 @@
 #include "vga_driver.h"
 #include "emulator_mode.h"
 #include "boot_menu.h"
+#include "cocosdc.h"
+#include "spi_stream.h"
 
 // Hardware Pin Definitions
 #define PIN_E_CLOCK 21
 #define PIN_RW 20
+#define PIN_BTN_DUAL 19
+#define PIN_STATUS_LED 17
 
 // I2S Pins (from build guide)
 #define I2S_BCK 10
@@ -43,8 +47,16 @@ SerialPIO rs232_serial(13, 15, 256); // TX=G13, RX=G15, 256-byte FIFO
 // Global emulator instances
 Pic7040 pic7040;
 Acia6551 acia(&rs232_serial);
+SpiStream spi_wimodem_stream;
+Acia6551 wimodem(&spi_wimodem_stream);
 V9958 v9958;
 VgaDriver vga_driver(&v9958);
+Cocosdc cocosdc;
+
+// Button Timer State
+uint32_t btn_press_start = 0;
+bool btn_is_pressed = false;
+bool btn_warning_active = false;
 
 // Function prototypes
 void update_orch90_audio();
@@ -55,6 +67,20 @@ void setup() {
 #ifdef PICO_DEFAULT_LED_PIN
     pinMode(PICO_DEFAULT_LED_PIN, OUTPUT);
 #endif
+
+    pinMode(PIN_BTN_DUAL, INPUT_PULLUP);
+    pinMode(PIN_STATUS_LED, OUTPUT);
+    digitalWrite(PIN_STATUS_LED, LOW);
+    delay(50); // Debounce settle
+    
+    // Check if button is held during boot
+    if (digitalRead(PIN_BTN_DUAL) == LOW) {
+        current_mode = MODE_BOOT_MENU;
+        Serial.println("Booting to: BOOT MENU (Button Held)");
+    } else {
+        current_mode = MODE_COCOSDC;
+        Serial.println("Booting to: CoCoSDC (Default)");
+    }
     
     // 1. Initialize I2S DAC (PCM5102A)
     i2s.setBCLK(I2S_BCK);
@@ -87,11 +113,54 @@ void setup() {
     // 6. Start both state machines synchronously
     pio_enable_sm_mask_in_sync(pio, (1u << sm_addr) | (1u << sm_data));
 
-    // 7. Delegate initial peripheral setup
+    // 7. Initialize SpiStream for Coprocessor
+    spi_wimodem_stream.begin();
+
+    // 8. Delegate initial peripheral setup
     switch_mode(current_mode);
 }
 
 void loop() {
+    // 1. Check Dual-Action Button
+    if (digitalRead(PIN_BTN_DUAL) == LOW) {
+        if (!btn_is_pressed) {
+            btn_is_pressed = true;
+            btn_press_start = millis();
+            btn_warning_active = false;
+        } else {
+            uint32_t hold_time = millis() - btn_press_start;
+            
+            if (hold_time >= 5000) {
+                // 5-Second Hold -> Reset to Boot Menu
+                digitalWrite(PIN_STATUS_LED, LOW);
+                btn_is_pressed = false; // Reset state before jumping
+                Serial.println("System Reset Triggered -> Returning to Boot Menu");
+                switch_mode(MODE_BOOT_MENU);
+            } 
+            else if (hold_time >= 3000) {
+                // 3-Second Warning -> Flash LED rapidly
+                digitalWrite(PIN_STATUS_LED, (millis() / 100) % 2);
+                btn_warning_active = true;
+            }
+        }
+    } else {
+        if (btn_is_pressed) {
+            uint32_t hold_time = millis() - btn_press_start;
+            btn_is_pressed = false;
+            
+            if (btn_warning_active) {
+                // They let go after warning but before reset. Just turn off LED.
+                digitalWrite(PIN_STATUS_LED, LOW);
+                btn_warning_active = false;
+            } 
+            else if (hold_time < 1000 && current_mode == MODE_COCOSDC) {
+                // Short press -> Disk Swap
+                Serial.println("Disk Swap Triggered");
+                esp32.sdc_swap();
+            }
+        }
+    }
+
     // Core 0 handles system tasks and Audio Generation / VGA Rendering
     if (current_mode == MODE_SPEECH_SOUND) {
         pic7040.tick();
@@ -104,6 +173,10 @@ void loop() {
         i2s.write(sample_r);
     } else if (current_mode == MODE_WORDPAK2) {
         vga_driver.tick();
+    } else if (current_mode == MODE_COCOSDC) {
+        cocosdc.tick();
+    } else if (current_mode == MODE_WIMODEM) {
+        spi_wimodem_stream.tick();
     } else if (current_mode == MODE_BOOT_MENU) {
         // Heartbeat LED
 #ifdef PICO_DEFAULT_LED_PIN
@@ -131,6 +204,12 @@ void loop1() {
             // Read Cycle Logic
             if (current_mode == MODE_BOOT_MENU && addr >= 0xC000 && addr <= 0xDFFF) {
                 uint8_t data_out = boot_menu.read_rom(addr);
+                gpio_set_dir_out_masked(0xFF);
+                gpio_put_masked(0xFF, data_out);
+                while (gpio_get(PIN_E_CLOCK)) {}
+                gpio_set_dir_in_masked(0xFF);
+            } else if (current_mode == MODE_COCOSDC && addr >= 0xC000 && addr <= 0xDFFF) {
+                uint8_t data_out = cocosdc.read_rom(addr);
                 gpio_set_dir_out_masked(0xFF);
                 gpio_put_masked(0xFF, data_out);
                 while (gpio_get(PIN_E_CLOCK)) {}
@@ -165,8 +244,27 @@ void loop1() {
                 gpio_put_masked(0xFF, data_out);
                 while (gpio_get(PIN_E_CLOCK)) {}
                 gpio_set_dir_in_masked(0xFF);
+            } else if (current_mode == MODE_WIMODEM && (addr >= 0xFF68 && addr <= 0xFF6B)) {
+                uint8_t data_out = 0;
+                if (addr == 0xFF68) {
+                    data_out = wimodem.read_data();
+                } else if (addr == 0xFF69) {
+                    data_out = wimodem.read_status();
+                }
+                
+                gpio_set_dir_out_masked(0xFF);
+                gpio_put_masked(0xFF, data_out);
+                while (gpio_get(PIN_E_CLOCK)) {}
+                gpio_set_dir_in_masked(0xFF);
             } else if (current_mode == MODE_WORDPAK2 && (addr == 0xFF78 || addr == 0xFF79)) {
                 uint8_t data_out = v9958.read_port(addr);
+                
+                gpio_set_dir_out_masked(0xFF);
+                gpio_put_masked(0xFF, data_out);
+                while (gpio_get(PIN_E_CLOCK)) {}
+                gpio_set_dir_in_masked(0xFF);
+            } else if (current_mode == MODE_COCOSDC && (addr == 0xFF40 || (addr >= 0xFF48 && addr <= 0xFF4B))) {
+                uint8_t data_out = cocosdc.read_register(addr);
                 
                 gpio_set_dir_out_masked(0xFF);
                 gpio_put_masked(0xFF, data_out);
@@ -211,9 +309,25 @@ void loop1() {
                     }
                     break;
                     
+                case MODE_WIMODEM:
+                    if (addr == 0xFF68) {
+                        wimodem.write_data((uint8_t)data);
+                    } else if (addr == 0xFF6A) {
+                        wimodem.write_command((uint8_t)data);
+                    } else if (addr == 0xFF6B) {
+                        wimodem.write_control((uint8_t)data);
+                    }
+                    break;
+                    
                 case MODE_WORDPAK2:
                     if (addr >= 0xFF78 && addr <= 0xFF7B) {
                         v9958.write_port(addr, data);
+                    }
+                    break;
+                    
+                case MODE_COCOSDC:
+                    if (addr == 0xFF40 || (addr >= 0xFF48 && addr <= 0xFF4B)) {
+                        cocosdc.write_register(addr, data);
                     }
                     break;
             }
@@ -257,6 +371,12 @@ void switch_mode(EmulatorMode new_mode) {
             break;
         case MODE_WORDPAK2:
             vga_driver.init();
+            break;
+        case MODE_COCOSDC:
+            cocosdc.init();
+            break;
+        case MODE_WIMODEM:
+            wimodem.init(true); // Always turbo mode for wimodem
             break;
         case MODE_ORCH90:
         case MODE_SPEECH_SOUND:

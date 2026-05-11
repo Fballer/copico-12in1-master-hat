@@ -31,7 +31,7 @@ void VgaDriver::init() {
     gpio_set_dir(PIN_HSYNC, GPIO_OUT);
     gpio_set_dir(PIN_VSYNC, GPIO_OUT);
 
-    _pio = pio0; // Using PIO0
+    _pio = pio1; // Using PIO1 to avoid conflict with bus sniffer on PIO0
 
     init_pio();
     init_dma();
