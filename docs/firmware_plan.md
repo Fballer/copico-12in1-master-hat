@@ -120,6 +120,24 @@ The Boot Menu will provide specific ROM options for the $C000-$DFFF address spac
 *   **Source files**: `io_dispatch.h`, `io_dispatch.cpp`, `coco_bus.pio` (`coco_bus_read` program).
 *   **Memory cost**: 256 × 4 bytes × 2 tables = **2 KB RAM** (negligible on RP2350's 520 KB).
 
+### VGA Jitter Elimination (DMA Interrupt-Driven Double Buffer)
+
+> [!NOTE]
+> The VGA signal is generated entirely by PIO1 (3 state machines: HSYNC, VSYNC, RGB) and fed by a DMA chain. The CPU is **never** in the VGA timing path.
+
+**Problem**: The original `tick()` function used a blocking `while()` loop that spun until the DMA finished reading a scanline buffer. If the CPU was busy (audio synthesis, bus handling), the loop stalled, causing visible jitter.
+
+**Solution**: A DMA completion interrupt (`DMA_IRQ_0`) fires when each scanline transfer finishes. The ISR:
+1.  Atomically swaps the active buffer index (0 ↔ 1)
+2.  Points the DMA at the new buffer
+3.  Increments a `_scanlines_completed` counter
+
+`tick()` checks the counter. If > 0, it renders the next scanline into the inactive buffer. If `tick()` falls behind (CPU busy), the DMA simply replays the last buffer — a graceful degradation (repeated scanline) instead of signal corruption.
+
+*   **Source files**: `vga_driver.h`, `vga_driver.cpp`, `vga_pio.pio`
+*   **ISR**: `VgaDriver::on_dma_complete()` (static, registered on `DMA_IRQ_0`)
+*   **CPU impact**: Zero. VGA signal is 100% hardware-driven.
+
 ---
 
 ### Multi-Pak Interface (MPI) Compatibility

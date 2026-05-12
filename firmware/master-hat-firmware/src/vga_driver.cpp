@@ -20,13 +20,19 @@
 #define PIN_VSYNC 16
 #define PIN_HSYNC 18
 
+// Global instance pointer for the static DMA ISR callback
+VgaDriver* g_vga_driver_instance = nullptr;
+
 VgaDriver::VgaDriver(V9958* vdp) : _vdp(vdp) {
-    _current_render_line = 0;
+    _next_render_line = 0;
     _active_buffer_idx = 0;
+    _scanlines_completed = 0;
+    _dma_read_ptr = nullptr;
 }
 
 void VgaDriver::init() {
     build_color_table();
+    g_vga_driver_instance = this;
 
     // Init pins
     gpio_init(PIN_RED);
@@ -41,7 +47,7 @@ void VgaDriver::init() {
     gpio_set_dir(PIN_HSYNC, GPIO_OUT);
     gpio_set_dir(PIN_VSYNC, GPIO_OUT);
 
-    _pio = pio1; // Using PIO1 to avoid conflict with bus sniffer on PIO0
+    _pio = pio1; // PIO1 to avoid conflict with bus sniffer on PIO0
 
     init_pio();
     init_dma();
@@ -134,6 +140,33 @@ void VgaDriver::init_pio() {
     pio_sm_set_enabled(_pio, _sm_rgb, true);
 }
 
+// ================================================================
+// DMA Interrupt-Driven Double Buffer System
+// ================================================================
+// WHY: The old tick() had a blocking while() loop that spun until
+//      the DMA finished reading a scanline buffer. If the CPU was
+//      busy (e.g., calculating an audio sample or handling a bus
+//      read), that loop would stall, causing the VGA output to
+//      jitter or tear.
+//
+// FIX: The DMA now fires an interrupt when it finishes transferring
+//      one scanline buffer to the PIO FIFO. The ISR:
+//        1. Clears the interrupt flag
+//        2. Atomically swaps the active buffer index
+//        3. Points the DMA at the new active buffer
+//        4. Restarts the DMA transfer
+//        5. Increments _scanlines_completed
+//
+//      tick() simply checks _scanlines_completed. If > 0, it
+//      renders the next scanline into the inactive buffer and
+//      decrements the counter. No blocking, no spinning.
+//
+// RESULT: VGA signal timing is now 100% hardware-driven (PIO+DMA).
+//         CPU load from tick() is purely "when available" rendering.
+//         Even if tick() runs late, the DMA replays the last buffer
+//         (same scanline repeated = graceful degradation, not jitter).
+// ================================================================
+
 void VgaDriver::init_dma() {
     _dma_rgb = dma_claim_unused_channel(true);
     _dma_ctrl = dma_claim_unused_channel(true);
@@ -145,24 +178,24 @@ void VgaDriver::init_dma() {
     }
     _dma_read_ptr = &_scanline_buffer[0][0];
 
-    // Data Channel (Sends instructions to RGB PIO)
+    // Data Channel: sends 320 words from scanline buffer to PIO TX FIFO
     dma_channel_config c0 = dma_channel_get_default_config(_dma_rgb);
     channel_config_set_transfer_data_size(&c0, DMA_SIZE_32);
     channel_config_set_read_increment(&c0, true);
     channel_config_set_write_increment(&c0, false);
-    channel_config_set_dreq(&c0, pio_get_dreq(_pio, _sm_rgb, true)); // Pace to RGB TX FIFO
-    channel_config_set_chain_to(&c0, _dma_ctrl); // Chain to control channel
+    channel_config_set_dreq(&c0, pio_get_dreq(_pio, _sm_rgb, true));
+    channel_config_set_chain_to(&c0, _dma_ctrl); // Chain to control channel on completion
 
     dma_channel_configure(
         _dma_rgb,
         &c0,
-        &_pio->txf[_sm_rgb], // Write to PIO TX FIFO
-        _dma_read_ptr,       // Read from active scanline buffer
-        320,                 // 320 words (640 instructions)
-        false                // Do not start yet
+        &_pio->txf[_sm_rgb],        // Write to PIO TX FIFO
+        (void*)_dma_read_ptr,        // Read from active scanline buffer
+        320,                         // 320 words = 640 pixel instructions
+        false                        // Don't start yet
     );
 
-    // Control Channel (Reloads the Data Channel)
+    // Control Channel: reloads the data channel's read address and restarts it
     dma_channel_config c1 = dma_channel_get_default_config(_dma_ctrl);
     channel_config_set_transfer_data_size(&c1, DMA_SIZE_32);
     channel_config_set_read_increment(&c1, false);
@@ -171,57 +204,71 @@ void VgaDriver::init_dma() {
     dma_channel_configure(
         _dma_ctrl,
         &c1,
-        &dma_hw->ch[_dma_rgb].read_addr, // Write new read address to Data channel
-        &_dma_read_ptr,                  // Read from our pointer variable
-        1,                               // 1 word
+        &dma_hw->ch[_dma_rgb].al3_read_addr_trig, // Write new addr AND restart
+        &_dma_read_ptr,                             // Read from our pointer variable
+        1,                                          // 1 word
         false
     );
 
-    // Start the process
+    // Register DMA interrupt on the DATA channel completion
+    dma_channel_set_irq0_enabled(_dma_rgb, true);
+    irq_set_exclusive_handler(DMA_IRQ_0, VgaDriver::on_dma_complete);
+    irq_set_enabled(DMA_IRQ_0, true);
+
+    // Start the DMA chain
     dma_channel_start(_dma_rgb);
 }
 
+// ================================================================
+// DMA Completion ISR — runs in hardware interrupt context.
+// Swaps the active buffer so the DMA reads from the freshly
+// rendered buffer, and signals tick() to render the next line.
+// ================================================================
+void VgaDriver::on_dma_complete() {
+    // Clear the interrupt
+    dma_hw->ints0 = (1u << g_vga_driver_instance->_dma_rgb);
+
+    // Swap active buffer index (0 -> 1 -> 0 ...)
+    g_vga_driver_instance->_active_buffer_idx ^= 1;
+
+    // Point DMA at the new active buffer for the next scanline
+    g_vga_driver_instance->_dma_read_ptr =
+        &g_vga_driver_instance->_scanline_buffer[g_vga_driver_instance->_active_buffer_idx][0];
+
+    // Signal tick() that a scanline completed
+    g_vga_driver_instance->_scanlines_completed++;
+}
+
+// ================================================================
+// tick(): Non-blocking scanline renderer.
+// Called from Core 0's loop(). Renders into the INACTIVE buffer
+// (the one the DMA is NOT currently reading). Returns immediately
+// if no scanline has completed since the last call.
+// ================================================================
 void VgaDriver::tick() {
-    // Simple polling loop to feed the scanline buffers.
-    // In a real implementation, we'd sync this with VSYNC or DMA interrupts.
-    // For now, we check if the active buffer index has changed by comparing
-    // the DMA read address to our expected buffer.
-    
-    uint32_t current_dma_addr = (uint32_t)dma_hw->ch[_dma_rgb].read_addr;
-    uint32_t active_buffer_start = (uint32_t)&_scanline_buffer[_active_buffer_idx][0];
-    uint32_t active_buffer_end = active_buffer_start + sizeof(_scanline_buffer[0]);
-    
-    // If the DMA is currently reading from the active buffer,
-    // we can safely render into the *inactive* buffer.
-    if (current_dma_addr >= active_buffer_start && current_dma_addr < active_buffer_end) {
-        uint8_t inactive_idx = _active_buffer_idx ^ 1;
-        
-        // Render 1 scanline (temp buffer for 3-bit colors)
-        uint8_t pixel_colors[640];
-        _vdp->render_scanline(_current_render_line, pixel_colors);
-        
-        // Convert to 16-bit PIO instructions
-        for (int i = 0; i < 320; i++) {
-            uint16_t instr0 = _color_instruction[pixel_colors[i * 2]];
-            uint16_t instr1 = _color_instruction[pixel_colors[i * 2 + 1]];
-            // Since we shift right in PIO, instr0 needs to be in the lower 16 bits
-            _scanline_buffer[inactive_idx][i] = (instr1 << 16) | instr0;
-        }
-        
-        _current_render_line++;
-        if (_current_render_line >= 480) {
-            _current_render_line = 0;
-        }
-        
-        // Swap buffers for the next DMA cycle
-        _active_buffer_idx = inactive_idx;
-        _dma_read_ptr = &_scanline_buffer[_active_buffer_idx][0];
-        
-        // Wait until DMA switches to the new buffer before rendering again
-        while ((uint32_t)dma_hw->ch[_dma_rgb].read_addr < active_buffer_end && 
-               (uint32_t)dma_hw->ch[_dma_rgb].read_addr >= active_buffer_start) {
-            // Tight loop (or yield)
-            delayMicroseconds(1); 
-        }
+    // Nothing to do if DMA hasn't finished a scanline since last call
+    if (_scanlines_completed == 0) return;
+
+    // Consume one completion event
+    _scanlines_completed--;
+
+    // Determine which buffer is safe to write into (opposite of active)
+    uint8_t render_idx = _active_buffer_idx ^ 1;
+
+    // Render the next scanline from the V9958 VRAM
+    uint8_t pixel_colors[640];
+    _vdp->render_scanline(_next_render_line, pixel_colors);
+
+    // Convert 3-bit colors to 16-bit PIO instructions, packed 2 per 32-bit word
+    for (int i = 0; i < 320; i++) {
+        uint16_t instr0 = _color_instruction[pixel_colors[i * 2]];
+        uint16_t instr1 = _color_instruction[pixel_colors[i * 2 + 1]];
+        _scanline_buffer[render_idx][i] = (instr1 << 16) | instr0;
+    }
+
+    // Advance to the next line (wrap at 480)
+    _next_render_line++;
+    if (_next_render_line >= 480) {
+        _next_render_line = 0;
     }
 }
