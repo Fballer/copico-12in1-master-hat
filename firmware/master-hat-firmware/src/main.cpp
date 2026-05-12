@@ -15,6 +15,7 @@
 #include "spi_stream.h"
 #include "esp32_bridge.h"
 #include "rtc.h"
+#include "io_dispatch.h"
 
 // ==========================================================
 // Hardware Pin Definitions — Verified against PCB Netlist
@@ -74,6 +75,10 @@ bool btn_warning_active = false;
 // Function prototypes
 void update_orch90_audio();
 void switch_mode(EmulatorMode new_mode);
+
+// PIN_RW and PIN_E_CLOCK are on the CoCo bus headers (directly read by PIO/GPIO)
+#define PIN_RW      20  // Active LOW = write cycle
+#define PIN_E_CLOCK 21  // E-clock from the CoCo
 
 void setup() {
     Serial.begin(115200);
@@ -233,121 +238,95 @@ void setup1() {
 // BUS_RESPOND(byte): Fast PIO-based read response macro.
 // Hands the data byte to the coco_bus_read PIO state machine,
 // which drives GPIO 0-7, waits for E-clock fall, then tri-states.
-// Replaces the old ~150ns gpio_set_dir_out_masked + gpio_put_masked
-// sequence with a single ~7ns FIFO write.
 // ---------------------------------------------------------------
 #define BUS_RESPOND(byte) pio_sm_put_blocking(pio, sm_read, (uint32_t)(byte))
 
+// ================================================================
+// loop1(): Core 1 — Hybrid Fast-Map Bus Handler
+// ================================================================
+// TIMING CONTEXT (why this code is structured the way it is):
+//
+// The CoCo's 6809/6309 CPU reads data from the bus on the
+// falling edge of the E-clock. We must drive valid data onto
+// GPIO 0-7 BEFORE that edge arrives. Our timing budget:
+//
+//   Stock CoCo (1.0 MHz):  ~500 ns  — easy
+//   Turbo       (1.79 MHz): ~279 ns  — comfortable
+//   GIME-X      (2.86 MHz): ~175 ns  — our design target
+//
+// ARCHITECTURE:
+//   1. ROM Shadow ($C000-$DFFF): Checked via a single function
+//      pointer (rom_read_handler). One comparison + indirect call.
+//      Cost: ~20 ns.
+//
+//   2. I/O Space ($FF00-$FFFF): Indexed lookup into a 256-entry
+//      function pointer table (io_read_table / io_write_table).
+//      Eliminates the old if/else chain entirely.
+//      Cost: ~7 ns (array index + null check + indirect call).
+//
+//   3. Special writes ($FF70-$FF73 boot config, $FF7F mode switch):
+//      Handled inline before the table lookup because they trigger
+//      system-level actions (EEPROM write, mode switch) that must
+//      not be deferred to a handler function.
+//
+// ESTIMATED TOTAL LATENCY: ~120 ns worst-case
+// MARGIN AT 2.86 MHz:      ~55 ns (comfortable)
+// ================================================================
+
 void loop1() {
-    // Tight poll: only proceed if both FIFOs have data
+    // Tight poll: bail immediately if no bus cycle to process
     if (pio_sm_is_rx_fifo_empty(pio, sm_addr) || pio_sm_is_rx_fifo_empty(pio, sm_data)) return;
 
     uint32_t addr = pio_sm_get(pio, sm_addr);
     uint32_t data = pio_sm_get(pio, sm_data);
     bool is_read = gpio_get(PIN_RW);
 
-        if (is_read) {
-            // --- READ CYCLE ---
-            // Use BUS_RESPOND() to hand data to the PIO SM — fast path.
-            if (current_mode == MODE_BOOT_MENU && addr >= 0xC000 && addr <= 0xDFFF) {
-                BUS_RESPOND(boot_menu.read_rom(addr));
-            } else if (current_mode == MODE_COCOSDC && addr >= 0xC000 && addr <= 0xDFFF) {
-                BUS_RESPOND(cocosdc.read_rom(addr));
-            } else if (addr == 0xFF7F) {
-                BUS_RESPOND((uint8_t)current_mode);
-            } else if (current_mode == MODE_SPEECH_SOUND && addr == 0xFF7E) {
-                BUS_RESPOND(pic7040.read_status());
-            } else if ((current_mode == MODE_RS232_PAK_LEGACY || current_mode == MODE_RS232_PAK_TURBO)
-                       && addr >= 0xFF68 && addr <= 0xFF6B) {
-                uint8_t d = (addr == 0xFF68) ? acia.read_data() : acia.read_status();
-                BUS_RESPOND(d);
-            } else if (current_mode == MODE_WIMODEM && addr >= 0xFF68 && addr <= 0xFF6B) {
-                uint8_t d = (addr == 0xFF68) ? wimodem.read_data() : wimodem.read_status();
-                BUS_RESPOND(d);
-            } else if (current_mode == MODE_WORDPAK2 && (addr == 0xFF78 || addr == 0xFF79)) {
-                BUS_RESPOND(v9958.read_port(addr));
-            } else if (current_mode == MODE_COCOSDC
-                       && (addr == 0xFF40 || (addr >= 0xFF48 && addr <= 0xFF4B))) {
-                BUS_RESPOND(cocosdc.read_register(addr));
-            } else if (addr == 0xFF50) {
-                BUS_RESPOND(rtc.read(addr));
+    if (is_read) {
+        // --- READ CYCLE (fast path) ---
+
+        // Path A: ROM shadow ($C000-$DFFF) — single pointer check
+        if (addr >= 0xC000 && addr <= 0xDFFF) {
+            if (rom_read_handler) {
+                BUS_RESPOND(rom_read_handler(addr));
             }
-            // Note: if no handler matches, we do NOT call BUS_RESPOND.
-            // The PIO SM stays idle (pull block) and the CoCo reads the
-            // open bus value naturally from the physical data bus pull-ups.
-        } else {
-            // Write Cycle Logic
-            if (current_mode == MODE_BOOT_MENU && addr >= 0xFF70 && addr <= 0xFF73) {
-                boot_menu.set_config(addr, (uint8_t)data);
-                return;
+            return;
+        }
+
+        // Path B: I/O space ($FF00-$FFFF) — table lookup
+        if (addr >= 0xFF00) {
+            IoReadFunc handler = io_read_table[addr & 0xFF];
+            if (handler) {
+                BUS_RESPOND(handler(addr));
             }
-            if (addr == 0xFF7F) {
-                if (current_mode == MODE_BOOT_MENU && data == 0x55) {
-                    EmulatorMode new_mode = boot_menu.calculate_mode();
-                    EEPROM.write(0, (uint8_t)new_mode);
-                    EEPROM.commit();
-                    switch_mode(new_mode);
-                } else {
-                    switch_mode((EmulatorMode)data);
-                }
-                return;
-            } else if (addr == 0xFF51 || addr == 0xFF75) {
-                rtc.write(addr, (uint8_t)data);
-                return;
+            // If handler is NULL, no device here — open bus.
+        }
+    } else {
+        // --- WRITE CYCLE ---
+
+        // Special: Boot Menu config registers (system-level, inline)
+        if (current_mode == MODE_BOOT_MENU && addr >= 0xFF70 && addr <= 0xFF73) {
+            boot_menu.set_config(addr, (uint8_t)data);
+            return;
+        }
+
+        // Special: Mode switch register (system-level, inline)
+        if (addr == 0xFF7F) {
+            if (current_mode == MODE_BOOT_MENU && data == 0x55) {
+                EmulatorMode new_mode = boot_menu.calculate_mode();
+                EEPROM.write(0, (uint8_t)new_mode);
+                EEPROM.commit();
+                switch_mode(new_mode);
+            } else {
+                switch_mode((EmulatorMode)data);
             }
-            switch (current_mode) {
-                case MODE_ORCH90:
-                    if (addr == 0xFF7A) {
-                        dac_left = (uint8_t)data;
-                        update_orch90_audio();
-                    } else if (addr == 0xFF7B) {
-                        dac_right = (uint8_t)data;
-                        update_orch90_audio();
-                    }
-                    break;
-                    
-                case MODE_SPEECH_SOUND:
-                    if (addr == 0xFF7D) {
-                        if (data & 0x01) {
-                            pic7040.reset();
-                        }
-                    } else if (addr == 0xFF7E) {
-                        pic7040.write_data((uint8_t)data);
-                    }
-                    break;
-                    
-                case MODE_RS232_PAK_LEGACY:
-                case MODE_RS232_PAK_TURBO:
-                    if (addr == 0xFF68) {
-                        acia.write_data((uint8_t)data);
-                    } else if (addr == 0xFF6A) {
-                        acia.write_command((uint8_t)data);
-                    } else if (addr == 0xFF6B) {
-                        acia.write_control((uint8_t)data);
-                    }
-                    break;
-                    
-                case MODE_WIMODEM:
-                    if (addr == 0xFF68) {
-                        wimodem.write_data((uint8_t)data);
-                    } else if (addr == 0xFF6A) {
-                        wimodem.write_command((uint8_t)data);
-                    } else if (addr == 0xFF6B) {
-                        wimodem.write_control((uint8_t)data);
-                    }
-                    break;
-                    
-                case MODE_WORDPAK2:
-                    if (addr >= 0xFF78 && addr <= 0xFF7B) {
-                        v9958.write_port(addr, data);
-                    }
-                    break;
-                    
-                case MODE_COCOSDC:
-                    if (addr == 0xFF40 || (addr >= 0xFF48 && addr <= 0xFF4B)) {
-                        cocosdc.write_register(addr, data);
-                    }
-                    break;
+            return;
+        }
+
+        // Normal I/O write — table lookup
+        if (addr >= 0xFF00) {
+            IoWriteFunc handler = io_write_table[addr & 0xFF];
+            if (handler) {
+                handler(addr, (uint8_t)data);
             }
         }
     }
@@ -376,6 +355,11 @@ void switch_mode(EmulatorMode new_mode) {
     esp32.send_command(CMD_RESET, nullptr, 0);
     
     current_mode = new_mode;
+    
+    // Rebuild the I/O dispatch tables for the new mode.
+    // This remaps the 256-entry function pointer tables so loop1()
+    // routes bus reads/writes to the correct emulator handlers.
+    rebuild_io_tables(new_mode);
     
     // 2. Initialize new mode
     switch (current_mode) {

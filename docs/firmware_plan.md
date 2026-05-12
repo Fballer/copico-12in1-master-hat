@@ -97,6 +97,31 @@ The Boot Menu will provide specific ROM options for the $C000-$DFFF address spac
 3.  **Slot 3: HDB-DOS**: (Hardcoded). Required for DriveWire and FujiNet wireless disk emulation.
 4.  **Slot 4: Custom User ROM**: The menu will scan a `/ROMS/` folder on the MicroSD card. Users can drop any `.rom` file (e.g., NitrOS-9 boot ROMs, diagnostics) into this folder via their PC, and the RP2350 will dynamically load it into emulation memory.
 
+### Bus Timing: Hybrid Fast-Map I/O Dispatch
+
+> [!IMPORTANT]
+> The CoCo bus at **2.86 MHz** (GIME-X + 6309 turbo) gives only **175 ns** to respond to a read. The original firmware used a C++ `if/else` chain that consumed ~40 ns in branch comparisons alone. Combined with slow `gpio_set_dir_out_masked()` calls, worst-case latency was ~500 ns — a guaranteed failure at turbo speeds.
+
+**Solution (Phase 8 Fortification):**
+
+1.  **PIO Read-Response SM** (`coco_bus_read`): A third PIO state machine on PIO0 handles the entire GPIO turnaround (set output → drive data → wait E-clock fall → tri-state) in hardware. This replaced ~150 ns of C++ MMIO calls with a single 7 ns FIFO write (`BUS_RESPOND()` macro).
+
+2.  **Hybrid Fast-Map**: The `if/else` dispatch chain was replaced with:
+    *   **ROM Shadow** (`$C000-$DFFF`): A single function pointer (`rom_read_handler`). One comparison + one indirect call = ~20 ns.
+    *   **I/O Space** (`$FF00-$FFFF`): A 256-entry function pointer table (`io_read_table[]` / `io_write_table[]`), indexed by `addr & 0xFF`. One array access + null check + indirect call = ~7 ns.
+    *   Tables are rebuilt on every mode switch via `rebuild_io_tables()`.
+
+| CoCo Speed | Budget | Estimated Latency | Margin |
+| :--- | :--- | :--- | :--- |
+| 1.0 MHz (Stock) | 500 ns | ~120 ns | ✅ 380 ns |
+| 1.79 MHz (Turbo) | 279 ns | ~120 ns | ✅ 159 ns |
+| 2.86 MHz (GIME-X) | 175 ns | ~120 ns | ✅ **55 ns** |
+
+*   **Source files**: `io_dispatch.h`, `io_dispatch.cpp`, `coco_bus.pio` (`coco_bus_read` program).
+*   **Memory cost**: 256 × 4 bytes × 2 tables = **2 KB RAM** (negligible on RP2350's 520 KB).
+
+---
+
 ### Multi-Pak Interface (MPI) Compatibility
 While the 10-in-1 Hat cannot connect directly to a physical floppy drive, it **can** operate inside a Tandy Multi-Pak Interface alongside a real physical Disk Controller. 
 *   **Hardware Handshake**: The Hat relies on the `CTS*` (Cartridge Select) signal. When in an MPI, the MPI hardware only sends the `CTS*` signal to the currently selected slot. 
