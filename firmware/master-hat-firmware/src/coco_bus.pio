@@ -1,21 +1,41 @@
 .program coco_sniffer_addr
-; Reads the 16-bit Address Bus during a Write Cycle
-; in_base = 32 (A0-A15)
-; jmp_pin = 20 (R/W)
+; Reads the 16-bit Address Bus on every E-clock cycle
+; in_base = 32 (A0-A15), jmp_pin = 20 (R/W)
 .wrap_target
     wait 1 gpio 21      ; Wait for E-clock HIGH
     in pins, 16         ; Read A0-A15
-    push noblock        ; Push address to CPU
+    push noblock        ; Push address to CPU (non-blocking — drops if FIFO full)
     wait 0 gpio 21      ; Wait for E-clock LOW to complete cycle
 .wrap
 
 .program coco_sniffer_data
 ; Reads the 8-bit Data Bus during a Write Cycle
-; in_base = 0 (D0-D7)
-; jmp_pin = 20 (R/W)
+; in_base = 0 (D0-D7), jmp_pin = 20 (R/W)
 .wrap_target
     wait 1 gpio 21      ; Wait for E-clock HIGH
     in pins, 8          ; Read D0-D7
-    push noblock        ; Push data to CPU
+    push noblock        ; Push data to CPU (non-blocking)
     wait 0 gpio 21      ; Wait for E-clock LOW to complete cycle
+.wrap
+
+; ============================================================
+; coco_bus_read: PIO-Accelerated Read Response State Machine
+; ============================================================
+; This SM handles driving the data bus for read cycles in hardware.
+; Core 1 only needs to write the response byte to the TX FIFO.
+; The SM drives GPIO 0-7 as outputs, holds the data until E falls,
+; then tri-states the bus. This eliminates the slow C++ GPIO calls.
+;
+; Pin Config:
+;   out_base = 0 (D0-D7, 8 pins output)
+;   set_base = 0 (D0-D7, used for direction control via pindirs)
+;   jmp_pin  = 21 (E-clock)
+; Clock: Run at 150MHz (clkdiv=1) for minimum latency.
+.program coco_bus_read
+.wrap_target
+    pull block              ; [1] Wait for Core 1 to provide a data byte
+    out pindirs, 8          ; [1] Set GPIO 0-7 as OUTPUTS (tri-state -> driven)
+    out pins, 8             ; [1] Drive the byte onto the data bus
+    wait 0 gpio 21          ; [?] Wait for E-clock to fall (CoCo latches on fall)
+    set pindirs, 0          ; [1] Release GPIO 0-7 back to INPUT (tri-state)
 .wrap

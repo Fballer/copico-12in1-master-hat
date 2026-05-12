@@ -36,7 +36,7 @@
 
 // PIO Configuration
 PIO pio = pio0;
-uint sm_addr, sm_data;
+uint sm_addr, sm_data, sm_read;
 
 // Audio state for Orch-90
 uint8_t dac_left = 128;
@@ -109,9 +109,11 @@ void setup() {
     // 2. Load PIO Programs
     uint offset_addr = pio_add_program(pio, &coco_sniffer_addr_program);
     uint offset_data = pio_add_program(pio, &coco_sniffer_data_program);
+    uint offset_read = pio_add_program(pio, &coco_bus_read_program);
 
     sm_addr = pio_claim_unused_sm(pio, true);
     sm_data = pio_claim_unused_sm(pio, true);
+    sm_read = pio_claim_unused_sm(pio, true);
 
     // 3. Configure SM_ADDR
     pio_sm_config c_addr = coco_sniffer_addr_program_get_default_config(offset_addr);
@@ -123,12 +125,25 @@ void setup() {
     sm_config_set_in_pins(&c_data, 0);  // D0 is GPIO 0
     pio_sm_init(pio, sm_data, offset_data, &c_data);
 
-    // 5. Initialize GPIO for data bus fast-turnaround
-    // (Pins 0-7 are already input by default, just setting up masks)
+    // 5. Configure SM_READ (PIO-Accelerated Read Response)
+    // Runs at full 150MHz (clkdiv=1) for minimum latency.
+    // out_base=0 (D0-D7), set_base=0 (for pindirs), out_shift_right=true
+    pio_sm_config c_read = coco_bus_read_program_get_default_config(offset_read);
+    sm_config_set_out_pins(&c_read, 0, 8);   // Drive D0-D7 (GPIO 0-7)
+    sm_config_set_set_pins(&c_read, 0, 8);   // Set pindirs for D0-D7
+    sm_config_set_out_shift(&c_read, true, false, 8); // Shift right, no autopull
+    sm_config_set_clkdiv(&c_read, 1.0f);     // Full 150MHz — minimum latency
+    // Initialize GPIO 0-7 as PIO-controlled (but input until SM drives them)
+    for (int i = 0; i < 8; i++) pio_gpio_init(pio, i);
+    pio_sm_set_consecutive_pindirs(pio, sm_read, 0, 8, false); // Start as inputs
+    pio_sm_init(pio, sm_read, offset_read, &c_read);
+    pio_sm_set_enabled(pio, sm_read, true); // Start immediately — it idles on pull block
+
+    // 6. Initialize GPIO for data bus (Pins 0-7 start as inputs)
     gpio_init_mask(0xFF);
     gpio_set_dir_in_masked(0xFF);
 
-    // 6. Start both state machines synchronously
+    // 7. Start address and data sniffer state machines synchronously
     pio_enable_sm_mask_in_sync(pio, (1u << sm_addr) | (1u << sm_data));
 
     // 7. Initialize SpiStream for Coprocessor
@@ -214,91 +229,52 @@ void setup1() {
     // Core 1 setup
 }
 
+// ---------------------------------------------------------------
+// BUS_RESPOND(byte): Fast PIO-based read response macro.
+// Hands the data byte to the coco_bus_read PIO state machine,
+// which drives GPIO 0-7, waits for E-clock fall, then tri-states.
+// Replaces the old ~150ns gpio_set_dir_out_masked + gpio_put_masked
+// sequence with a single ~7ns FIFO write.
+// ---------------------------------------------------------------
+#define BUS_RESPOND(byte) pio_sm_put_blocking(pio, sm_read, (uint32_t)(byte))
+
 void loop1() {
-    // Poll the FIFOs tightly
-    if (!pio_sm_is_rx_fifo_empty(pio, sm_addr) && !pio_sm_is_rx_fifo_empty(pio, sm_data)) {
-        uint32_t addr = pio_sm_get(pio, sm_addr);
-        uint32_t data = pio_sm_get(pio, sm_data);
-        bool is_read = gpio_get(PIN_RW);
+    // Tight poll: only proceed if both FIFOs have data
+    if (pio_sm_is_rx_fifo_empty(pio, sm_addr) || pio_sm_is_rx_fifo_empty(pio, sm_data)) return;
+
+    uint32_t addr = pio_sm_get(pio, sm_addr);
+    uint32_t data = pio_sm_get(pio, sm_data);
+    bool is_read = gpio_get(PIN_RW);
 
         if (is_read) {
-            // Read Cycle Logic
+            // --- READ CYCLE ---
+            // Use BUS_RESPOND() to hand data to the PIO SM — fast path.
             if (current_mode == MODE_BOOT_MENU && addr >= 0xC000 && addr <= 0xDFFF) {
-                uint8_t data_out = boot_menu.read_rom(addr);
-                gpio_set_dir_out_masked(0xFF);
-                gpio_put_masked(0xFF, data_out);
-                while (gpio_get(PIN_E_CLOCK)) {}
-                gpio_set_dir_in_masked(0xFF);
+                BUS_RESPOND(boot_menu.read_rom(addr));
             } else if (current_mode == MODE_COCOSDC && addr >= 0xC000 && addr <= 0xDFFF) {
-                uint8_t data_out = cocosdc.read_rom(addr);
-                gpio_set_dir_out_masked(0xFF);
-                gpio_put_masked(0xFF, data_out);
-                while (gpio_get(PIN_E_CLOCK)) {}
-                gpio_set_dir_in_masked(0xFF);
+                BUS_RESPOND(cocosdc.read_rom(addr));
             } else if (addr == 0xFF7F) {
-                // Readback for current mode (Trigger Port)
-                gpio_set_dir_out_masked(0xFF);
-                gpio_put_masked(0xFF, (uint8_t)current_mode);
-                while (gpio_get(PIN_E_CLOCK)) {}
-                gpio_set_dir_in_masked(0xFF);
+                BUS_RESPOND((uint8_t)current_mode);
             } else if (current_mode == MODE_SPEECH_SOUND && addr == 0xFF7E) {
-                uint8_t status = pic7040.read_status();
-                
-                // Turn around data bus (GPIO 0-7)
-                gpio_set_dir_out_masked(0xFF);
-                gpio_put_masked(0xFF, status);
-                
-                // Wait for E-clock to fall so CoCo can latch the data
-                while (gpio_get(PIN_E_CLOCK)) {} 
-                
-                // Instantly revert to input
-                gpio_set_dir_in_masked(0xFF);
-            } else if ((current_mode == MODE_RS232_PAK_LEGACY || current_mode == MODE_RS232_PAK_TURBO) && (addr >= 0xFF68 && addr <= 0xFF6B)) {
-                uint8_t data_out = 0;
-                if (addr == 0xFF68) {
-                    data_out = acia.read_data();
-                } else if (addr == 0xFF69) {
-                    data_out = acia.read_status();
-                }
-                
-                gpio_set_dir_out_masked(0xFF);
-                gpio_put_masked(0xFF, data_out);
-                while (gpio_get(PIN_E_CLOCK)) {}
-                gpio_set_dir_in_masked(0xFF);
-            } else if (current_mode == MODE_WIMODEM && (addr >= 0xFF68 && addr <= 0xFF6B)) {
-                uint8_t data_out = 0;
-                if (addr == 0xFF68) {
-                    data_out = wimodem.read_data();
-                } else if (addr == 0xFF69) {
-                    data_out = wimodem.read_status();
-                }
-                
-                gpio_set_dir_out_masked(0xFF);
-                gpio_put_masked(0xFF, data_out);
-                while (gpio_get(PIN_E_CLOCK)) {}
-                gpio_set_dir_in_masked(0xFF);
+                BUS_RESPOND(pic7040.read_status());
+            } else if ((current_mode == MODE_RS232_PAK_LEGACY || current_mode == MODE_RS232_PAK_TURBO)
+                       && addr >= 0xFF68 && addr <= 0xFF6B) {
+                uint8_t d = (addr == 0xFF68) ? acia.read_data() : acia.read_status();
+                BUS_RESPOND(d);
+            } else if (current_mode == MODE_WIMODEM && addr >= 0xFF68 && addr <= 0xFF6B) {
+                uint8_t d = (addr == 0xFF68) ? wimodem.read_data() : wimodem.read_status();
+                BUS_RESPOND(d);
             } else if (current_mode == MODE_WORDPAK2 && (addr == 0xFF78 || addr == 0xFF79)) {
-                uint8_t data_out = v9958.read_port(addr);
-                
-                gpio_set_dir_out_masked(0xFF);
-                gpio_put_masked(0xFF, data_out);
-                while (gpio_get(PIN_E_CLOCK)) {}
-                gpio_set_dir_in_masked(0xFF);
-            } else if (current_mode == MODE_COCOSDC && (addr == 0xFF40 || (addr >= 0xFF48 && addr <= 0xFF4B))) {
-                uint8_t data_out = cocosdc.read_register(addr);
-                
-                gpio_set_dir_out_masked(0xFF);
-                gpio_put_masked(0xFF, data_out);
-                while (gpio_get(PIN_E_CLOCK)) {}
-                gpio_set_dir_in_masked(0xFF);
+                BUS_RESPOND(v9958.read_port(addr));
+            } else if (current_mode == MODE_COCOSDC
+                       && (addr == 0xFF40 || (addr >= 0xFF48 && addr <= 0xFF4B))) {
+                BUS_RESPOND(cocosdc.read_register(addr));
             } else if (addr == 0xFF50) {
-                uint8_t data_out = rtc.read(addr);
-                
-                gpio_set_dir_out_masked(0xFF);
-                gpio_put_masked(0xFF, data_out);
-                while (gpio_get(PIN_E_CLOCK)) {}
-                gpio_set_dir_in_masked(0xFF);
+                BUS_RESPOND(rtc.read(addr));
             }
+            // Note: if no handler matches, we do NOT call BUS_RESPOND.
+            // The PIO SM stays idle (pull block) and the CoCo reads the
+            // open bus value naturally from the physical data bus pull-ups.
         } else {
             // Write Cycle Logic
             if (current_mode == MODE_BOOT_MENU && addr >= 0xFF70 && addr <= 0xFF73) {
