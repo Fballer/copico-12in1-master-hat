@@ -1,7 +1,7 @@
-# Copico 12-in-1 Master Hat: Firmware Architecture & Implementation Plan
+# Copico 10-in-1 Master Hat: Firmware Architecture & Implementation Plan
 **Date: May 2026 — Updated with verified PCB netlist (Hat-Fuji-40C v1)**
 
-This document details the software architecture and development roadmap for the **12-in-1 Master Hat**. It leverages the RP2350 dual-core processor to emulate an entire suite of CoCo expansions.
+This document details the software architecture and development roadmap for the **10-in-1 Master Hat**. It leverages the RP2350 dual-core processor to emulate an entire suite of CoCo expansions.
 
 > [!IMPORTANT]
 > This plan assumes the hardware is built according to the [Hardware Assembly Guide](file:///Users/macbook/.gemini/antigravity/brain/01be4bfb-ce62-4b38-8036-e57a2e46b2b8/hardware_build_guide.md).
