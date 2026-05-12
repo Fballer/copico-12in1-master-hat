@@ -46,42 +46,121 @@ void Esp32Bridge::transfer(const uint8_t* tx_buf, uint8_t* rx_buf, size_t len) {
     delayMicroseconds(50); 
 }
 
+// ================================================================
+// SPI Transaction with Deadlock Insurance
+// ================================================================
+// WHY: If the ESP32 hangs (brownout, firmware crash, SD card fault),
+//      the old code would spin for 5 seconds in a while() loop.
+//      During that time, Core 0 is frozen — which means cocosdc.tick()
+//      blocks, the WiModem stream stops, and the status LED dies.
+//
+// FIX: Tiered timeouts + retry counter + diagnostic output.
+//   - SD operations: 500ms max (worst-case FAT32 seek)
+//   - Simple commands: 100ms max
+//   - Max 3 retries before giving up
+//   - Serial diagnostic on every failure for debug
+// ================================================================
+
+#define SPI_TIMEOUT_SD_MS     500   // Max wait for SD read/write
+#define SPI_TIMEOUT_CMD_MS    100   // Max wait for simple commands
+#define SPI_MAX_RETRIES       3     // Retry count before hard-fail
+
 bool Esp32Bridge::transaction(SpiMasterPacket* tx_packet, SpiSlavePacket* rx_packet) {
     spi_bus_locked = true;
-    
+
+    // Choose timeout based on command type
+    uint32_t timeout_ms;
+    switch (tx_packet->command) {
+        case CMD_SDC_READ:
+        case CMD_SDC_WRITE:
+        case CMD_SDC_MOUNT:
+            timeout_ms = SPI_TIMEOUT_SD_MS;
+            break;
+        default:
+            timeout_ms = SPI_TIMEOUT_CMD_MS;
+            break;
+    }
+
     // 1. Send the primary packet
     tx_packet->sync = SPI_SYNC_BYTE;
     tx_packet->checksum = calc_checksum((uint8_t*)tx_packet, sizeof(SpiMasterPacket) - 1);
-    
+
     transfer((uint8_t*)tx_packet, (uint8_t*)rx_packet, sizeof(SpiMasterPacket));
 
-    // 2. Poll if ESP32 is busy
+    // 2. Check if first response is already valid and terminal
+    if (rx_packet->sync == SPI_SYNC_BYTE &&
+        calc_checksum((uint8_t*)rx_packet, sizeof(SpiSlavePacket) - 1) == rx_packet->checksum &&
+        rx_packet->status != STATUS_SDC_BUSY) {
+        spi_bus_locked = false;
+        return true;
+    }
+
+    // 3. Poll with timeout and retry limit
     SpiMasterPacket poll_packet;
     memset(&poll_packet, 0, sizeof(poll_packet));
     poll_packet.sync = SPI_SYNC_BYTE;
     poll_packet.command = CMD_POLL;
     poll_packet.checksum = calc_checksum((uint8_t*)&poll_packet, sizeof(poll_packet) - 1);
 
-    uint32_t timeout = millis() + 5000; // 5 second maximum timeout for SD operations
-    
-    while (millis() < timeout) {
-        // If we received a valid response on the first try, break
-        if (rx_packet->sync == SPI_SYNC_BYTE && calc_checksum((uint8_t*)rx_packet, sizeof(SpiSlavePacket) - 1) == rx_packet->checksum) {
-            if (rx_packet->status != STATUS_SDC_BUSY) {
-                spi_bus_locked = false;
-                return true; // Valid terminal status
-            }
-        }
-        
-        // Wait a short moment before polling again to not hammer the SPI bus
+    uint32_t deadline = millis() + timeout_ms;
+    uint8_t retries = 0;
+    uint8_t bad_checksums = 0;
+
+    while (millis() < deadline) {
         delay(1);
-        
-        // Send POLL
         transfer((uint8_t*)&poll_packet, (uint8_t*)rx_packet, sizeof(SpiMasterPacket));
+
+        // Validate response
+        if (rx_packet->sync != SPI_SYNC_BYTE) {
+            retries++;
+            if (retries >= SPI_MAX_RETRIES) break;
+            continue;
+        }
+
+        uint8_t expected = calc_checksum((uint8_t*)rx_packet, sizeof(SpiSlavePacket) - 1);
+        if (expected != rx_packet->checksum) {
+            bad_checksums++;
+            if (bad_checksums >= SPI_MAX_RETRIES) {
+                Serial.println("[SPI] FAIL: repeated checksum errors");
+                break;
+            }
+            continue;
+        }
+
+        if (rx_packet->status != STATUS_SDC_BUSY) {
+            spi_bus_locked = false;
+            return true; // Success
+        }
+        // Still busy — keep polling (reset retry counter since ESP32 is alive)
+        retries = 0;
     }
-    
+
+    // Timeout or hard failure
+    Serial.print("[SPI] FAIL: cmd=0x");
+    Serial.print(tx_packet->command, HEX);
+    Serial.print(" timeout=");
+    Serial.print(timeout_ms);
+    Serial.print("ms retries=");
+    Serial.print(retries);
+    Serial.print(" bad_csum=");
+    Serial.println(bad_checksums);
+
     spi_bus_locked = false;
-    return false; // Timeout
+    return false;
+}
+
+bool Esp32Bridge::send_command(uint8_t cmd, const uint8_t* payload, uint8_t len) {
+    SpiMasterPacket tx;
+    SpiSlavePacket rx;
+    memset(&tx, 0, sizeof(tx));
+
+    tx.command = cmd;
+    tx.length = len;
+    if (payload && len > 0 && len <= SPI_PAYLOAD_SIZE) {
+        memcpy(tx.payload, payload, len);
+    }
+
+    return transaction(&tx, &rx);
 }
 
 bool Esp32Bridge::sdc_read_sector(uint8_t drive_id, uint32_t lsn, uint8_t* buffer) {

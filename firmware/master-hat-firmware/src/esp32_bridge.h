@@ -9,8 +9,11 @@ public:
     Esp32Bridge();
     void init();
     
-    // Core transaction method (blocks until Slave replies with something other than BUSY)
+    // Core transaction (blocks with tiered timeout + retry limit — see esp32_bridge.cpp)
     bool transaction(SpiMasterPacket* tx_packet, SpiSlavePacket* rx_packet);
+
+    // Fire-and-forget command (wraps transaction, ignores response)
+    bool send_command(uint8_t cmd, const uint8_t* payload, uint8_t len);
 
     // SDC Specific Helpers
     bool sdc_read_sector(uint8_t drive_id, uint32_t lsn, uint8_t* buffer);

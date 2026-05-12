@@ -7,11 +7,11 @@ extern Rtc rtc;
 
 volatile bool spi_bus_locked = false;
 
-// Hardware SPI pins for Coprocessor
-#define PIN_SPI_MISO 23
-#define PIN_SPI_MOSI 24
-#define PIN_SPI_CS   26
-#define PIN_SPI_SCK  28
+// SPI pins — Verified against PCB Netlist (Hat-Fuji-40C)
+#define PIN_SPI_CS   23  // J4 Pin 7:  ESP_C3_CS_G23
+#define PIN_SPI_MISO 24  // J4 Pin 9:  ESP_C3_MISO_G24
+#define PIN_SPI_SCK  30  // J4 Pin 15: ESP_C3_SCK_G30
+#define PIN_SPI_MOSI 31  // J4 Pin 16: ESP_C3_MOSI_G31
 
 SpiStream::SpiStream() {
     memset(&_tx_packet, 0, sizeof(_tx_packet));
