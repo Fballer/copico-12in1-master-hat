@@ -16,16 +16,23 @@
 #include "esp32_bridge.h"
 #include "rtc.h"
 
-// Hardware Pin Definitions
-#define PIN_E_CLOCK 21
-#define PIN_RW 20
-#define PIN_BTN_DUAL 19
-#define PIN_STATUS_LED 17
+// ==========================================================
+// Hardware Pin Definitions — Verified against PCB Netlist
+// Centipede 32z Hat-Fuji-40C schematic, dated 2026-04-19
+// ==========================================================
 
-// I2S Pins (from build guide)
-#define I2S_BCK 10
-#define I2S_DIN 11
-#define I2S_LCK 12
+// J3 Header — System Control
+#define PIN_BTN_DUAL   19  // J3 Pin 17: SDC_Button_G19
+#define PIN_STATUS_LED 17  // J3 Pin 15: SDC_LED_G17
+// Note: J3 Pin 18 = RESET line (hardware Reset_Pad)
+
+// J3 Header — I2S DAC (PCM5102A: Orch-90 / Speech+Sound)
+#define I2S_BCK 10  // J3 Pin 5:  Sound_BCK_G10  -> PCM5102A BCK
+#define I2S_DIN 11  // J3 Pin 7:  Sound_DIN_G11  -> PCM5102A DIN
+#define I2S_LCK 12  // J3 Pin 9:  Sound_LCK_G12  -> PCM5102A LCK
+
+// J3 Header — RS-232 (HW-044 MAX3232 Module)
+// TX=G13 and RX=G15 are handled by SerialPIO (see below)
 
 // PIO Configuration
 PIO pio = pio0;

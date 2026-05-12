@@ -3,7 +3,17 @@
 #include "hardware/clocks.h"
 #include "hardware/irq.h"
 
-// Hardware Pin Definitions (From Build Guide)
+// ==========================================================
+// VGA Pin Definitions — Verified against PCB Netlist
+// Centipede 32z Hat-Fuji-40C schematic, dated 2026-04-19
+// SuperSprite FM+ / WordPac 2+ VGA Module (KH-HDR15P-F3.08)
+// J3 Header Mapping:
+//   J3 Pin 1  -> VGA_GREEN_G8  -> R4 (470R) -> VGA Pin 2
+//   J3 Pin 3  -> VGA_BLUE_G9   -> R5 (470R) -> VGA Pin 3
+//   J3 Pin 12 -> VGA_RED_G14   -> R3 (470R) -> VGA Pin 1
+//   J3 Pin 14 -> VGA_VSync_G16 -> R1 (100R) -> VGA Pin 14
+//   J3 Pin 16 -> VGA_HSync_G18 -> R2 (100R) -> VGA Pin 13
+// ==========================================================
 #define PIN_GREEN 8
 #define PIN_BLUE  9
 #define PIN_RED   14

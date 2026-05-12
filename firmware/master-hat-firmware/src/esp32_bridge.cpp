@@ -2,11 +2,19 @@
 
 extern volatile bool spi_bus_locked;
 
-// Define the SPI pins (From Phase 10 Refactor / Phase 7 Build Guide)
-#define BRIDGE_MISO 23
-#define BRIDGE_MOSI 24
-#define BRIDGE_CS   26
-#define BRIDGE_SCK  28
+// ============================================================
+// SPI Bridge Pin Definitions — Verified against PCB Netlist
+// (Centipede 32z Hat-Fuji-40C, schematic dated 2026-04-19)
+// J4 Header Mapping:
+//   Pin 7  -> ESP_C3_CS_G23   -> ESP32 GPIO4
+//   Pin 9  -> ESP_C3_MISO_G24 -> ESP32 GPIO0
+//   Pin 15 -> ESP_C3_SCK_G30  -> ESP32 GPIO3
+//   Pin 16 -> ESP_C3_MOSI_G31 -> ESP32 GPIO1
+// ============================================================
+#define BRIDGE_CS   23
+#define BRIDGE_MISO 24
+#define BRIDGE_SCK  30
+#define BRIDGE_MOSI 31
 
 Esp32Bridge esp32;
 

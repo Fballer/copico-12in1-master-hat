@@ -1,7 +1,7 @@
-# Copico 10-in-1 Master Hat: Firmware Architecture & Implementation Plan
-**Date: May 6, 2026**
+# Copico 12-in-1 Master Hat: Firmware Architecture & Implementation Plan
+**Date: May 2026 — Updated with verified PCB netlist (Hat-Fuji-40C v1)**
 
-This document details the software architecture and development roadmap for the **10-in-1 Master Hat**. It leverages the RP2350 dual-core processor to emulate an entire suite of CoCo expansions.
+This document details the software architecture and development roadmap for the **12-in-1 Master Hat**. It leverages the RP2350 dual-core processor to emulate an entire suite of CoCo expansions.
 
 > [!IMPORTANT]
 > This plan assumes the hardware is built according to the [Hardware Assembly Guide](file:///Users/macbook/.gemini/antigravity/brain/01be4bfb-ce62-4b38-8036-e57a2e46b2b8/hardware_build_guide.md).
@@ -65,15 +65,29 @@ We will develop each module in isolation, hardcoding the RP2350 for testing befo
 
 ## 4. Boot Menu & ROM Management
 *   **Native VDG Menu**: The primary menu runs on the CoCo's original green/black screen.
-*   **BIOS Shared Memory**: The RP2350 exposes a shared memory block starting at `$C800` for the 6809 to read real-time status strings dynamically injected by the ESP32 and RP2350:
-    *   `$C800`: WiFi Status (max 32 bytes, null-terminated)
-    *   `$C820`: ESP32 Firmware Version (max 32 bytes, null-terminated)
-    *   `$C840`: SD Card Status (max 32 bytes, null-terminated)
-    *   `$C860`: Time Zone Setting (max 32 bytes, null-terminated)
+*   **BIOS Shared Memory**: The RP2350 exposes a shared memory block starting at `$D800` for the 6809 to read real-time status strings dynamically injected by the ESP32 and RP2350:
+    *   `$D800`: WiFi Status (max 32 bytes, null-terminated)
+    *   `$D820`: ESP32 Firmware Version (max 32 bytes, null-terminated)
+    *   `$D840`: SD Card Status (max 32 bytes, null-terminated)
+    *   `$D860`: Time Zone Setting (max 32 bytes, null-terminated)
+
+> [!NOTE]
+> Status buffers were relocated from `$C800` to `$D800` (Phase 8) to prevent conflicts with the BIOS ROM code space (`$C000-$DFFF`).
+
 *   **Hardware Registers**:
     *   `$FF50-$FF51`: Emulated MSM5832 RTC interface (compatible with Disto 4-N-1 and NitrOS-9).
-    *   `$FF75`: Time Zone control register (Write 0-4 to configure offset from ESP32 NTP).
-*   **WiFi Soft-Reset**: On boot/reset, the RP2350 sends a high-priority "System Reset" command via SPI to the ESP32 to ensure synchronized initialization (Software Handshake).
+    *   `$FF70`: Boot Menu Audio selection register.
+    *   `$FF71`: Boot Menu Video selection register.
+    *   `$FF72`: Boot Menu Disk selection register.
+    *   `$FF73`: Boot Menu Comm selection register.
+    *   `$FF75`: Time Zone index register (Write 0-17 to select timezone; ESP32 applies POSIX TZ string).
+    *   `$FF7F`: Mode-switch register (Write EmulatorMode value to switch; Write `$55` from Boot Menu to save+switch).
+
+*   **RP2350 ↔ ESP32 SPI Link (Verified PCB Netlist)**:
+    *   **CS** : RP2350 **G23** ↔ ESP32 **GPIO4** (J4 Pin 7)
+    *   **MISO**: RP2350 **G24** ↔ ESP32 **GPIO0** (J4 Pin 9)
+    *   **SCK** : RP2350 **G30** ↔ ESP32 **GPIO3** (J4 Pin 15)
+    *   **MOSI**: RP2350 **G31** ↔ ESP32 **GPIO1** (J4 Pin 16)
 *   **Personality Swapping**: Selecting a menu item triggers a "hot-swap" of the RP2350's memory mapping.
 
 ### ROM Management Strategy (SD Card Loading)
