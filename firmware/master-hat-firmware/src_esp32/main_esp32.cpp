@@ -4,6 +4,8 @@
 #include "spi_protocol.h"
 #include "ModemEngine.h"
 #include "SdFat.h"
+#include <time.h>
+#include <WiFi.h>
 
 // Define ESP32-C3 pins connected to RP2350 SPI (Hardware Layout Phase 10)
 #define ESP_SPI_MISO 0
@@ -36,6 +38,55 @@ volatile uint16_t modem_rx_tail = 0;
 uint8_t modem_tx_fifo[ESP_FIFO_SIZE]; // Data going TO RP2350
 volatile uint16_t modem_tx_head = 0;
 volatile uint16_t modem_tx_tail = 0;
+
+uint32_t last_sys_info_time = 0;
+char current_tz_name[32] = "UTC (GMT)";
+const char* tz_strings[] = {
+    // North America
+    "NST3:30NDT,M3.2.0,M11.1.0",
+    "AST4ADT,M3.2.0,M11.1.0",
+    "EST5EDT,M3.2.0,M11.1.0",
+    "CST6CDT,M3.2.0,M11.1.0",
+    "MST7MDT,M3.2.0,M11.1.0",
+    "PST8PDT,M3.2.0,M11.1.0",
+    // Europe/World
+    "UTC0",
+    "WET0WEST,M3.5.0/1,M10.5.0",
+    "CET-1CEST,M3.5.0,M10.5.0",
+    "EET-2EEST,M3.5.0/3,M10.5.0/4",
+    "MSK-3",
+    "GST-4",
+    // Asia/Oceania
+    "IST-5:30",
+    "CST-8",
+    "JST-9",
+    "AWST-8",
+    "ACST-9:30ACDT,M10.1.0,M4.1.0",
+    "AEST-10AEDT,M10.1.0,M4.1.0"
+};
+const char* tz_names[] = {
+    // North America
+    "UTC-3:30 (St. John's)",
+    "UTC-4 (Halifax)",
+    "UTC-5 (Toronto)",
+    "UTC-6 (Winnipeg)",
+    "UTC-7 (Calgary)",
+    "UTC-8 (Vancouver)",
+    // Europe/World
+    "UTC (GMT)",
+    "UTC+0 (London)",
+    "UTC+1 (Paris)",
+    "UTC+2 (Athens)",
+    "UTC+3 (Moscow)",
+    "UTC+4 (Dubai)",
+    // Asia/Oceania
+    "UTC+5:30 (New Delhi)",
+    "UTC+8 (Beijing)",
+    "UTC+9 (Tokyo)",
+    "UTC+8 (Perth)",
+    "UTC+9:30 (Adelaide)",
+    "UTC+10 (Sydney)"
+};
 
 void spi_slave_init() {
     // Configuration for the SPI bus
@@ -158,12 +209,56 @@ void process_spi_transaction() {
                     tx_packet.payload[0] = 0x00; // Success
                     tx_packet.length = 1;
                 }
+                else if (rx_packet.command == CMD_SET_TIMEZONE) {
+                    uint8_t tz_idx = rx_packet.payload[0];
+                    if (tz_idx < 18) {
+                        setenv("TZ", tz_strings[tz_idx], 1);
+                        tzset();
+                        snprintf(current_tz_name, sizeof(current_tz_name), "    %s", tz_names[tz_idx]);
+                        Serial.printf("ESP32: Timezone set to %s\n", current_tz_name);
+                    }
+                }
+                else if (rx_packet.command == CMD_RESET) {
+                    // Soft reset: clear WiModem buffers and sync SD files
+                    modem_rx_head = 0;
+                    modem_rx_tail = 0;
+                    modem_tx_head = 0;
+                    modem_tx_tail = 0;
+                    for(int i=0; i<2; i++) {
+                        if(drives[i]) drives[i].sync();
+                    }
+                    Serial.println("ESP32: Received CMD_RESET (System Reset)");
+                }
             }
         }
 
         // --- PREPARE THE NEXT TX PACKET ---
-        // If we didn't just fulfill an SDC read/write, default to polling WiModem data
-        if (rx_packet.command != CMD_SDC_READ && rx_packet.command != CMD_SDC_WRITE && rx_packet.command != CMD_SDC_MOUNT && rx_packet.command != CMD_SDC_SWAP) {
+        uint32_t now = millis();
+        // Send SYS_INFO every 5 seconds if not doing SDC commands
+        if (now - last_sys_info_time >= 5000 && rx_packet.command != CMD_SDC_READ && rx_packet.command != CMD_SDC_WRITE && rx_packet.command != CMD_SDC_MOUNT && rx_packet.command != CMD_SDC_SWAP) {
+            last_sys_info_time = now;
+            memset(&tx_packet, 0, sizeof(tx_packet));
+            tx_packet.sync = SPI_SYNC_BYTE;
+            tx_packet.status = STATUS_SYS_INFO;
+            tx_packet.length = sizeof(SpiSysInfoPayload);
+            
+            SpiSysInfoPayload* sys_info = (SpiSysInfoPayload*)tx_packet.payload;
+            
+            if (WiFi.status() == WL_CONNECTED) {
+                snprintf(sys_info->wifi_status, 32, "%s | %s", WiFi.SSID().c_str(), WiFi.localIP().toString().c_str());
+            } else {
+                strncpy(sys_info->wifi_status, "NOT CONNECTED", 32);
+            }
+            
+            strncpy(sys_info->fw_version, "V1.0.0-ESP32", 32);
+            strncpy(sys_info->sd_status, "MOUNTED", 32); // Hardcoded for now
+            strncpy(sys_info->tz_name, current_tz_name, 32);
+            
+            time_t now_time;
+            time(&now_time);
+            sys_info->ntp_timestamp = (uint32_t)now_time;
+            
+        } else if (rx_packet.command != CMD_SDC_READ && rx_packet.command != CMD_SDC_WRITE && rx_packet.command != CMD_SDC_MOUNT && rx_packet.command != CMD_SDC_SWAP) {
             memset(&tx_packet, 0, sizeof(tx_packet));
             tx_packet.sync = SPI_SYNC_BYTE;
             tx_packet.status = STATUS_IDLE;
@@ -209,6 +304,11 @@ void setup() {
     Serial.println("ESP32-C3 Coprocessor Starting...");
     
     spi_slave_init();
+    
+    // Initialize Time
+    configTime(0, 0, "pool.ntp.org");
+    setenv("TZ", tz_strings[0], 1);
+    tzset();
     
     // Start SPI processing task on core 0 (ESP32-C3 is single core anyway)
     xTaskCreate(spi_task, "spi_task", 4096, NULL, 5, NULL);

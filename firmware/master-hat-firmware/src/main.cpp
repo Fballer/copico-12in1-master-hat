@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <EEPROM.h>
 #include <I2S.h>
 #include "hardware/pio.h"
 #include "coco_bus.pio.h"
@@ -13,6 +14,7 @@
 #include "cocosdc.h"
 #include "spi_stream.h"
 #include "esp32_bridge.h"
+#include "rtc.h"
 
 // Hardware Pin Definitions
 #define PIN_E_CLOCK 21
@@ -41,6 +43,9 @@ EmulatorMode current_mode = MODE_BOOT_MENU;
 
 // Boot Menu instance
 BootMenu boot_menu;
+
+// RTC Emulation instance
+Rtc rtc;
 
 // RS-232 Hardware UART Pins (via SerialPIO to map to any GPIO)
 SerialPIO rs232_serial(13, 15, 256); // TX=G13, RX=G15, 256-byte FIFO
@@ -74,13 +79,18 @@ void setup() {
     digitalWrite(PIN_STATUS_LED, LOW);
     delay(50); // Debounce settle
     
+    EEPROM.begin(512);
+    uint8_t saved_mode = EEPROM.read(0);
+    if (saved_mode > MODE_MAX) saved_mode = (uint8_t)MODE_COCOSDC;
+    
     // Check if button is held during boot
     if (digitalRead(PIN_BTN_DUAL) == LOW) {
         current_mode = MODE_BOOT_MENU;
         Serial.println("Booting to: BOOT MENU (Button Held)");
     } else {
-        current_mode = MODE_COCOSDC;
-        Serial.println("Booting to: CoCoSDC (Default)");
+        current_mode = (EmulatorMode)saved_mode;
+        Serial.print("Booting to Saved Mode: ");
+        Serial.println(current_mode);
     }
     
     // 1. Initialize I2S DAC (PCM5102A)
@@ -116,8 +126,11 @@ void setup() {
 
     // 7. Initialize SpiStream for Coprocessor
     spi_wimodem_stream.begin();
+    
+    // 8. Initialize RTC Emulation
+    rtc.init();
 
-    // 8. Delegate initial peripheral setup
+    // 9. Delegate initial peripheral setup
     switch_mode(current_mode);
 }
 
@@ -271,11 +284,32 @@ void loop1() {
                 gpio_put_masked(0xFF, data_out);
                 while (gpio_get(PIN_E_CLOCK)) {}
                 gpio_set_dir_in_masked(0xFF);
+            } else if (addr == 0xFF50) {
+                uint8_t data_out = rtc.read(addr);
+                
+                gpio_set_dir_out_masked(0xFF);
+                gpio_put_masked(0xFF, data_out);
+                while (gpio_get(PIN_E_CLOCK)) {}
+                gpio_set_dir_in_masked(0xFF);
             }
         } else {
             // Write Cycle Logic
+            if (current_mode == MODE_BOOT_MENU && addr >= 0xFF70 && addr <= 0xFF73) {
+                boot_menu.set_config(addr, (uint8_t)data);
+                return;
+            }
             if (addr == 0xFF7F) {
-                switch_mode((EmulatorMode)data);
+                if (current_mode == MODE_BOOT_MENU && data == 0x55) {
+                    EmulatorMode new_mode = boot_menu.calculate_mode();
+                    EEPROM.write(0, (uint8_t)new_mode);
+                    EEPROM.commit();
+                    switch_mode(new_mode);
+                } else {
+                    switch_mode((EmulatorMode)data);
+                }
+                return;
+            } else if (addr == 0xFF51 || addr == 0xFF75) {
+                rtc.write(addr, (uint8_t)data);
                 return;
             }
             switch (current_mode) {
@@ -355,7 +389,8 @@ void switch_mode(EmulatorMode new_mode) {
     Serial.println(new_mode);
     
     // 1. Cleanup old mode
-    // (We keep the core bus sniffers running, but could add peripheral cleanup here)
+    // Send soft-reset to ESP32 to clear any active connections or buffers
+    esp32.send_command(CMD_RESET, nullptr, 0);
     
     current_mode = new_mode;
     

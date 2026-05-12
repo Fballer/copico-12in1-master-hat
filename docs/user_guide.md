@@ -31,7 +31,7 @@ The bottom half of the screen lists the available configuration toggles. Use the
     *   **COCOSDC (SD)** (SD Card floppy emulation)
     *   **FUJINET** (Network drive emulation)
     *   **REGULAR COCO** (Native disk controller only)
-*   `[R]` **RTC**: Toggles the Real-Time Clock on/off.
+*   `[R]` **RTC**: Toggles the Real-Time Clock on/off. (When ON, emulates a Disto 4-N-1 MSM5832 RTC, providing time to OS-9/NitrOS-9 automatically upon boot).
 
 *Note: The Comm and Disk options for FujiNet are internally linked. Selecting FujiNet for Disk will automatically switch Comm to FujiNet as well, as they share the same backend architecture.*
 
@@ -63,6 +63,10 @@ From the Advanced Options screen, press the corresponding number key to enter a 
     *   Use `[P]` to send a ping command to verify connectivity.
 *   `[5]` **CLEAR WIFI SETTINGS**
     *   Safely erase your saved WiFi network and password from the ESP32's flash memory.
+*   `[6]` **TIME ZONE CONFIGURATION**
+    *   Set your local time zone so the Network Time Protocol (NTP) sync provides the correct local time to the RTC.
+    *   The top of the screen displays the currently selected time zone.
+    *   Use keys `[1]` through `[5]` to select from UTC, EST, CST, MST, or PST. The RTC will instantly update and provide this time to OS-9.
 
 ### Returning to the Main Menu
 At any time within the Options Menu or its Sub-Menus, press `[X]` to cancel your current action and return to the previous screen.

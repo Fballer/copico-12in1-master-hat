@@ -22,7 +22,7 @@ The RP2350 acts as a real-time bridge between the CoCo's 6809 bus and modern per
 | **FujiNet** | ESP32 Networking | [GitHub: FujiNet PlatformIO](https://github.com/FujiNetWIFI/fujinet-platformio) \| [GitHub: fujinet-firmware](https://github.com/FujiNetWIFI/fujinet-firmware) |
 | **DriveWire 4** | Virtual Serial Disk | [Source: DriveWire 4](http://www.drivewire4.com/) \| [GitHub: pyDriveWire](https://github.com/n64764/pyDriveWire) |
 | **WiModem** | AT Command Modem | [Reference: Zimodem Firmware](https://github.com/boisy/Zimodem) \| [GitHub: GuruModem](https://github.com/pizet/GuruModem) |
-| **Real-Time Clock** | DS3231 (I2C) | [Library: DS3231 I2C](https://github.com/adafruit/Adafruit_DS3231) \| [GitHub: CoCo RTC Driver](https://github.com/boisy/NitrOS-9/blob/master/sys/modules/rtc3231.as) |
+| **Real-Time Clock** | MSM5832 Emulation | [Library: DS3231 I2C](https://github.com/adafruit/Adafruit_DS3231) \| [GitHub: CoCo RTC Driver](https://github.com/boisy/NitrOS-9/blob/master/sys/modules/rtc3231.as) |
 | **SuperSprite FM+** | TMS9918 + OPL2 | [Reference: TMS9918 Datasheet](https://www.msxarchive.nl/pub/msx/mirrors/hansa.xs4all.nl/tms9918.pdf) \| [GitHub: OPL2 Emulator](https://github.com/D-S-X/OPL2-Emulation) |
 | **Lark MIDI Pak** | 6850 ACIA | [Reference: MIDI 1.0 Spec](https://www.midi.org/specifications-old/item/the-midi-1-0-specification) \| Emulates hardware MIDI through the 4-pin expansion header. |
 | **Boot Menu** | Injected 6809 Code | [Source: FujiNet Config Application](https://github.com/FujiNetWIFI/fujinet-config) \| [GitHub: Mega-Cart](https://github.com/sublogic/MegaCart) |
@@ -69,6 +69,10 @@ We will develop each module in isolation, hardcoding the RP2350 for testing befo
     *   `$C800`: WiFi Status (max 32 bytes, null-terminated)
     *   `$C820`: ESP32 Firmware Version (max 32 bytes, null-terminated)
     *   `$C840`: SD Card Status (max 32 bytes, null-terminated)
+    *   `$C860`: Time Zone Setting (max 32 bytes, null-terminated)
+*   **Hardware Registers**:
+    *   `$FF50-$FF51`: Emulated MSM5832 RTC interface (compatible with Disto 4-N-1 and NitrOS-9).
+    *   `$FF75`: Time Zone control register (Write 0-4 to configure offset from ESP32 NTP).
 *   **WiFi Soft-Reset**: On boot/reset, the RP2350 sends a high-priority "System Reset" command via SPI to the ESP32 to ensure synchronized initialization (Software Handshake).
 *   **Personality Swapping**: Selecting a menu item triggers a "hot-swap" of the RP2350's memory mapping.
 

@@ -13,14 +13,16 @@ VAR_COMM    EQU     $0103
 VAR_RTC     EQU     $0104
 VAR_TMODE   EQU     $0105       * Toggle mode for PSTR_T ($40=normal,$00=inv)
 
-STATUS_BUF  EQU     $C800
-STATUS_FW   EQU     $C820
-STATUS_SD   EQU     $C840
+STATUS_BUF  EQU     $D800
+STATUS_FW   EQU     $D820
+STATUS_SD   EQU     $D840
+STATUS_TZ   EQU     $D860
 REG_AUDIO   EQU     $FF70
 REG_VIDEO   EQU     $FF71
 REG_DISK    EQU     $FF72
 REG_COMM    EQU     $FF73
 REG_RTC     EQU     $FF74
+REG_TZ      EQU     $FF75
 REG_BOOT    EQU     $FF7F
 
             ORG     $C000
@@ -128,7 +130,9 @@ DO_BOOT:
             STA     REG_RTC
             LDA     #$55
             STA     REG_BOOT
-HANG:       BRA     HANG
+            LBSR    DRAW_SAVING
+            LBSR    DELAY_1S
+            JMP     [$FFFE]
 
 *******************************************************************************
 * OPTIONS_LOOP - Submenu State
@@ -156,6 +160,8 @@ OPT_INPUT:
             LBEQ    LOOP_BRIDGE
             CMPA    #'5'
             LBEQ    LOOP_CLEAR
+            CMPA    #'6'
+            LBEQ    LOOP_TZ_PG1
             
             BRA     OPT_INPUT
 
@@ -211,6 +217,147 @@ LC_IN:      JSR     [POLCAT]
             CMPA    #'x'
             LBEQ    OPTIONS_LOOP
             BRA     LC_IN
+
+LOOP_TZ_PG1: LBSR    DRAW_TZ_PG1
+LTZ1_IN:    JSR     [POLCAT]
+            TSTA
+            BEQ     LTZ1_IN
+            CMPA    #'X'
+            LBEQ    OPTIONS_LOOP
+            CMPA    #'x'
+            LBEQ    OPTIONS_LOOP
+            CMPA    #'N'
+            LBEQ    LOOP_TZ_PG2
+            CMPA    #'n'
+            LBEQ    LOOP_TZ_PG2
+            CMPA    #'1'
+            LBEQ    LTZ1_S1
+            CMPA    #'2'
+            LBEQ    LTZ1_S2
+            CMPA    #'3'
+            LBEQ    LTZ1_S3
+            CMPA    #'4'
+            LBEQ    LTZ1_S4
+            CMPA    #'5'
+            LBEQ    LTZ1_S5
+            CMPA    #'6'
+            LBEQ    LTZ1_S6
+            BRA     LTZ1_IN
+LTZ1_S1:    LDA     #0
+            STA     REG_TZ
+            LBRA    TZ_SAVE_EXIT
+LTZ1_S2:    LDA     #1
+            STA     REG_TZ
+            LBRA    TZ_SAVE_EXIT
+LTZ1_S3:    LDA     #2
+            STA     REG_TZ
+            LBRA    TZ_SAVE_EXIT
+LTZ1_S4:    LDA     #3
+            STA     REG_TZ
+            LBRA    TZ_SAVE_EXIT
+LTZ1_S5:    LDA     #4
+            STA     REG_TZ
+            LBRA    TZ_SAVE_EXIT
+LTZ1_S6:    LDA     #5
+            STA     REG_TZ
+            LBRA    TZ_SAVE_EXIT
+
+LOOP_TZ_PG2: LBSR    DRAW_TZ_PG2
+LTZ2_IN:    JSR     [POLCAT]
+            TSTA
+            BEQ     LTZ2_IN
+            CMPA    #'X'
+            LBEQ    OPTIONS_LOOP
+            CMPA    #'x'
+            LBEQ    OPTIONS_LOOP
+            CMPA    #'P'
+            LBEQ    LOOP_TZ_PG1
+            CMPA    #'p'
+            LBEQ    LOOP_TZ_PG1
+            CMPA    #'N'
+            LBEQ    LOOP_TZ_PG3
+            CMPA    #'n'
+            LBEQ    LOOP_TZ_PG3
+            CMPA    #'1'
+            LBEQ    LTZ2_S1
+            CMPA    #'2'
+            LBEQ    LTZ2_S2
+            CMPA    #'3'
+            LBEQ    LTZ2_S3
+            CMPA    #'4'
+            LBEQ    LTZ2_S4
+            CMPA    #'5'
+            LBEQ    LTZ2_S5
+            CMPA    #'6'
+            LBEQ    LTZ2_S6
+            BRA     LTZ2_IN
+LTZ2_S1:    LDA     #6
+            STA     REG_TZ
+            LBRA    TZ_SAVE_EXIT
+LTZ2_S2:    LDA     #7
+            STA     REG_TZ
+            LBRA    TZ_SAVE_EXIT
+LTZ2_S3:    LDA     #8
+            STA     REG_TZ
+            LBRA    TZ_SAVE_EXIT
+LTZ2_S4:    LDA     #9
+            STA     REG_TZ
+            LBRA    TZ_SAVE_EXIT
+LTZ2_S5:    LDA     #10
+            STA     REG_TZ
+            LBRA    TZ_SAVE_EXIT
+LTZ2_S6:    LDA     #11
+            STA     REG_TZ
+            LBRA    TZ_SAVE_EXIT
+
+LOOP_TZ_PG3: LBSR    DRAW_TZ_PG3
+LTZ3_IN:    JSR     [POLCAT]
+            TSTA
+            BEQ     LTZ3_IN
+            CMPA    #'X'
+            LBEQ    OPTIONS_LOOP
+            CMPA    #'x'
+            LBEQ    OPTIONS_LOOP
+            CMPA    #'P'
+            LBEQ    LOOP_TZ_PG2
+            CMPA    #'p'
+            LBEQ    LOOP_TZ_PG2
+            CMPA    #'1'
+            LBEQ    LTZ3_S1
+            CMPA    #'2'
+            LBEQ    LTZ3_S2
+            CMPA    #'3'
+            LBEQ    LTZ3_S3
+            CMPA    #'4'
+            LBEQ    LTZ3_S4
+            CMPA    #'5'
+            LBEQ    LTZ3_S5
+            CMPA    #'6'
+            LBEQ    LTZ3_S6
+            BRA     LTZ3_IN
+LTZ3_S1:    LDA     #12
+            STA     REG_TZ
+            LBRA    TZ_SAVE_EXIT
+LTZ3_S2:    LDA     #13
+            STA     REG_TZ
+            LBRA    TZ_SAVE_EXIT
+LTZ3_S3:    LDA     #14
+            STA     REG_TZ
+            LBRA    TZ_SAVE_EXIT
+LTZ3_S4:    LDA     #15
+            STA     REG_TZ
+            BRA     TZ_SAVE_EXIT
+LTZ3_S5:    LDA     #16
+            STA     REG_TZ
+            BRA     TZ_SAVE_EXIT
+LTZ3_S6:    LDA     #17
+            STA     REG_TZ
+            BRA     TZ_SAVE_EXIT
+
+TZ_SAVE_EXIT:
+            LBSR    DRAW_SAVING
+            LBSR    DELAY_1S
+            LBRA    OPTIONS_LOOP
 
 *******************************************************************************
 * DRAW_MAIN
@@ -394,6 +541,10 @@ DOCLR:      STA     ,X+
             
             LDX     #STR_OPT_5
             LDU     #$0500
+            LBSR    PSTR_T
+            
+            LDX     #STR_OPT_6
+            LDU     #$0520
             LBSR    PSTR_T
 
             * Row 10: Divider (dark)
@@ -659,6 +810,192 @@ DC_CLR:     STA     ,X+
             LDX     #STR_CLR_X
             LDU     #$05E0
             LBSR    PSTR_T
+            RTS
+
+*******************************************************************************
+* DRAW_TZ_PG1
+*******************************************************************************
+DRAW_TZ_PG1:
+            LDX     #$0400
+            LDA     #$60
+DTZ1_CLR:   STA     ,X+
+            CMPX    #$0600
+            BNE     DTZ1_CLR
+
+            LDX     #STR_TZ_T1
+            LDU     #$0400
+            LBSR    PSTR_D
+            LDX     #STR_TZ_H
+            LDU     #$0440
+            LBSR    PSTR_D
+            
+            LDX     #STATUS_TZ
+            LDA     ,X
+            BNE     DTZ1_VAL
+            LDX     #STR_UNK
+DTZ1_VAL:   LDU     #$0480
+            LBSR    PSTR_N_MAX
+
+            LDX     #STR_TZ_1
+            LDU     #$04A0
+            LBSR    PSTR_T
+            LDX     #STR_TZ_2
+            LDU     #$04C0
+            LBSR    PSTR_T
+            LDX     #STR_TZ_3
+            LDU     #$04E0
+            LBSR    PSTR_T
+            LDX     #STR_TZ_4
+            LDU     #$0500
+            LBSR    PSTR_T
+            LDX     #STR_TZ_5
+            LDU     #$0520
+            LBSR    PSTR_T
+            LDX     #STR_TZ_6
+            LDU     #$0540
+            LBSR    PSTR_T
+            LDX     #STR_DIV_OPT
+            LDU     #$0560
+            LBSR    PSTR_D
+            LDX     #STR_PROMPT
+            LDU     #$0580
+            LBSR    PSTR_N_MAX
+            LDX     #STR_RTN_N
+            LDU     #$05E0
+            LBSR    PSTR_T
+            RTS
+
+*******************************************************************************
+* DRAW_TZ_PG2
+*******************************************************************************
+DRAW_TZ_PG2:
+            LDX     #$0400
+            LDA     #$60
+DTZ2_CLR:   STA     ,X+
+            CMPX    #$0600
+            BNE     DTZ2_CLR
+
+            LDX     #STR_TZ_T2
+            LDU     #$0400
+            LBSR    PSTR_D
+            LDX     #STR_TZ_H
+            LDU     #$0440
+            LBSR    PSTR_D
+            
+            LDX     #STATUS_TZ
+            LDA     ,X
+            BNE     DTZ2_VAL
+            LDX     #STR_UNK
+DTZ2_VAL:   LDU     #$0480
+            LBSR    PSTR_N_MAX
+
+            LDX     #STR_TZ_7
+            LDU     #$04A0
+            LBSR    PSTR_T
+            LDX     #STR_TZ_8
+            LDU     #$04C0
+            LBSR    PSTR_T
+            LDX     #STR_TZ_9
+            LDU     #$04E0
+            LBSR    PSTR_T
+            LDX     #STR_TZ_10
+            LDU     #$0500
+            LBSR    PSTR_T
+            LDX     #STR_TZ_11
+            LDU     #$0520
+            LBSR    PSTR_T
+            LDX     #STR_TZ_12
+            LDU     #$0540
+            LBSR    PSTR_T
+            LDX     #STR_DIV_OPT
+            LDU     #$0560
+            LBSR    PSTR_D
+            LDX     #STR_PROMPT
+            LDU     #$0580
+            LBSR    PSTR_N_MAX
+            LDX     #STR_RTN_NP
+            LDU     #$05E0
+            LBSR    PSTR_T
+            RTS
+
+*******************************************************************************
+* DRAW_TZ_PG3
+*******************************************************************************
+DRAW_TZ_PG3:
+            LDX     #$0400
+            LDA     #$60
+DTZ3_CLR:   STA     ,X+
+            CMPX    #$0600
+            BNE     DTZ3_CLR
+
+            LDX     #STR_TZ_T3
+            LDU     #$0400
+            LBSR    PSTR_D
+            LDX     #STR_TZ_H
+            LDU     #$0440
+            LBSR    PSTR_D
+            
+            LDX     #STATUS_TZ
+            LDA     ,X
+            BNE     DTZ3_VAL
+            LDX     #STR_UNK
+DTZ3_VAL:   LDU     #$0480
+            LBSR    PSTR_N_MAX
+
+            LDX     #STR_TZ_13
+            LDU     #$04A0
+            LBSR    PSTR_T
+            LDX     #STR_TZ_14
+            LDU     #$04C0
+            LBSR    PSTR_T
+            LDX     #STR_TZ_15
+            LDU     #$04E0
+            LBSR    PSTR_T
+            LDX     #STR_TZ_16
+            LDU     #$0500
+            LBSR    PSTR_T
+            LDX     #STR_TZ_17
+            LDU     #$0520
+            LBSR    PSTR_T
+            LDX     #STR_TZ_18
+            LDU     #$0540
+            LBSR    PSTR_T
+            LDX     #STR_DIV_OPT
+            LDU     #$0560
+            LBSR    PSTR_D
+            LDX     #STR_PROMPT
+            LDU     #$0580
+            LBSR    PSTR_N_MAX
+            LDX     #STR_RTN_P
+            LDU     #$05E0
+            LBSR    PSTR_T
+            RTS
+
+*******************************************************************************
+* DRAW_SAVING
+*******************************************************************************
+DRAW_SAVING:
+            LDX     #$0400
+            LDA     #$60
+DSAV_CLR:   STA     ,X+
+            CMPX    #$0600
+            BNE     DSAV_CLR
+
+            LDX     #STR_SAVING
+            LDU     #$04C0
+            LBSR    PSTR_D
+            RTS
+
+*******************************************************************************
+* DELAY_1S
+*******************************************************************************
+DELAY_1S:
+            LDB     #2
+D1S_OUTER:  LDX     #$FFFF
+D1S_LOOP:   LEAX    -1,X
+            BNE     D1S_LOOP
+            DECB
+            BNE     D1S_OUTER
             RTS
 
 *******************************************************************************
@@ -961,6 +1298,13 @@ STR_OPT_5   FCC     "   "
             FCC     " CLEAR WIFI SETTINGS      "
             FCB     0
 
+STR_OPT_6   FCC     "   "
+            FCB     $01
+            FCC     "[6]"
+            FCB     $01
+            FCC     " TIME ZONE CONFIGURATION  "
+            FCB     0
+
 STR_DIV_OPT FCC     "------------------------------- "
             FCB     0
 
@@ -1148,11 +1492,167 @@ STR_CLR_X   FCC     "   "
             FCC     " TO CANCEL/RETURN         "
             FCB     0
 
+* --- TIME ZONE STRINGS ---
+STR_TZ_T1   FCC     " *** TZ: NORTH AMERICA (1/3) ***"
+            FCB     0
+STR_TZ_T2   FCC     " *** TZ: EUROPE/WORLD  (2/3) ***"
+            FCB     0
+STR_TZ_T3   FCC     " *** TZ: ASIA/OCEANIA  (3/3) ***"
+            FCB     0
+STR_TZ_H    FCC     "  ------CURRENT SELECTION-------"
+            FCB     0
+STR_TZ_1    FCC     "   "
+            FCB     $01
+            FCC     "[1]"
+            FCB     $01
+            FCC     " NFLD (UTC-3:30) ST JOHN'S"
+            FCB     0
+STR_TZ_2    FCC     "   "
+            FCB     $01
+            FCC     "[2]"
+            FCB     $01
+            FCC     " AST  (UTC-4) HALIFAX     "
+            FCB     0
+STR_TZ_3    FCC     "   "
+            FCB     $01
+            FCC     "[3]"
+            FCB     $01
+            FCC     " EST  (UTC-5) TORONTO     "
+            FCB     0
+STR_TZ_4    FCC     "   "
+            FCB     $01
+            FCC     "[4]"
+            FCB     $01
+            FCC     " CST  (UTC-6) WINNIPEG    "
+            FCB     0
+STR_TZ_5    FCC     "   "
+            FCB     $01
+            FCC     "[5]"
+            FCB     $01
+            FCC     " MST  (UTC-7) CALGARY     "
+            FCB     0
+STR_TZ_6    FCC     "   "
+            FCB     $01
+            FCC     "[6]"
+            FCB     $01
+            FCC     " PST  (UTC-8) VANCOUVER   "
+            FCB     0
+STR_TZ_7    FCC     "   "
+            FCB     $01
+            FCC     "[1]"
+            FCB     $01
+            FCC     " UTC  (GMT)               "
+            FCB     0
+STR_TZ_8    FCC     "   "
+            FCB     $01
+            FCC     "[2]"
+            FCB     $01
+            FCC     " WET  (UTC+0) LONDON      "
+            FCB     0
+STR_TZ_9    FCC     "   "
+            FCB     $01
+            FCC     "[3]"
+            FCB     $01
+            FCC     " CET  (UTC+1) PARIS       "
+            FCB     0
+STR_TZ_10   FCC     "   "
+            FCB     $01
+            FCC     "[4]"
+            FCB     $01
+            FCC     " EET  (UTC+2) ATHENS      "
+            FCB     0
+STR_TZ_11   FCC     "   "
+            FCB     $01
+            FCC     "[5]"
+            FCB     $01
+            FCC     " MSK  (UTC+3) MOSCOW      "
+            FCB     0
+STR_TZ_12   FCC     "   "
+            FCB     $01
+            FCC     "[6]"
+            FCB     $01
+            FCC     " GST  (UTC+4) DUBAI       "
+            FCB     0
+STR_TZ_13   FCC     "   "
+            FCB     $01
+            FCC     "[1]"
+            FCB     $01
+            FCC     " IST  (UTC+5:30) NEW DELHI"
+            FCB     0
+STR_TZ_14   FCC     "   "
+            FCB     $01
+            FCC     "[2]"
+            FCB     $01
+            FCC     " CST  (UTC+8) BEIJING     "
+            FCB     0
+STR_TZ_15   FCC     "   "
+            FCB     $01
+            FCC     "[3]"
+            FCB     $01
+            FCC     " JST  (UTC+9) TOKYO       "
+            FCB     0
+STR_TZ_16   FCC     "   "
+            FCB     $01
+            FCC     "[4]"
+            FCB     $01
+            FCC     " AWST (UTC+8) PERTH       "
+            FCB     0
+STR_TZ_17   FCC     "   "
+            FCB     $01
+            FCC     "[5]"
+            FCB     $01
+            FCC     " ACST (UTC+9:30) ADELAIDE "
+            FCB     0
+STR_TZ_18   FCC     "   "
+            FCB     $01
+            FCC     "[6]"
+            FCB     $01
+            FCC     " AEST (UTC+10) SYDNEY     "
+            FCB     0
+
 STR_RTN_X   FCC     "    PRESS "
             FCB     $01
             FCC     "[X]"
             FCB     $01
             FCC     " TO RETURN         "
+            FCB     0
+STR_RTN_N   FCC     "  "
+            FCB     $01
+            FCC     "[N]"
+            FCB     $01
+            FCC     "EXT "
+            FCB     $01
+            FCC     "[X]"
+            FCB     $01
+            FCC     " RETURN           "
+            FCB     0
+STR_RTN_P   FCC     "  "
+            FCB     $01
+            FCC     "[P]"
+            FCB     $01
+            FCC     "REV "
+            FCB     $01
+            FCC     "[X]"
+            FCB     $01
+            FCC     " RETURN           "
+            FCB     0
+STR_RTN_NP  FCC     "  "
+            FCB     $01
+            FCC     "[P]"
+            FCB     $01
+            FCC     "REV "
+            FCB     $01
+            FCC     "[N]"
+            FCB     $01
+            FCC     "EXT "
+            FCB     $01
+            FCC     "[X]"
+            FCB     $01
+            FCC     " RET"
+            FCB     0
+STR_PROMPT  FCC     "   SELECT 1-6 OR N/P/X TO EXIT  "
+            FCB     0
+STR_SAVING  FCC     "  *** SAVING CONFIGURATION ***  "
             FCB     0
 
             ORG     $DFFF

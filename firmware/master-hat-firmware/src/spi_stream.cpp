@@ -1,4 +1,9 @@
 #include "spi_stream.h"
+#include "boot_menu.h"
+#include "rtc.h"
+
+extern BootMenu boot_menu;
+extern Rtc rtc;
 
 volatile bool spi_bus_locked = false;
 
@@ -41,15 +46,21 @@ void SpiStream::tick() {
     _tx_packet.sync = SPI_SYNC_BYTE;
     _tx_packet.command = CMD_POLL;
     
-    uint8_t tx_len = 0;
-    while (tx_len < SPI_PAYLOAD_SIZE && _tx_head != _tx_tail) {
-        _tx_packet.payload[tx_len++] = _tx_buffer[_tx_tail];
-        _tx_tail = (_tx_tail + 1) % SPI_STREAM_BUFFER_SIZE;
-    }
-    _tx_packet.length = tx_len;
-    
-    if (tx_len > 0) {
-        _tx_packet.command = CMD_TX_DATA;
+    if (rtc.has_pending_tz_update()) {
+        _tx_packet.command = CMD_SET_TIMEZONE;
+        _tx_packet.payload[0] = rtc.get_pending_tz_index();
+        _tx_packet.length = 1;
+    } else {
+        uint8_t tx_len = 0;
+        while (tx_len < SPI_PAYLOAD_SIZE && _tx_head != _tx_tail) {
+            _tx_packet.payload[tx_len++] = _tx_buffer[_tx_tail];
+            _tx_tail = (_tx_tail + 1) % SPI_STREAM_BUFFER_SIZE;
+        }
+        _tx_packet.length = tx_len;
+        
+        if (tx_len > 0) {
+            _tx_packet.command = CMD_TX_DATA;
+        }
     }
     
     _tx_packet.checksum = calc_checksum((const uint8_t*)&_tx_packet, sizeof(_tx_packet) - 1);
@@ -71,6 +82,10 @@ void SpiStream::tick() {
                         _rx_head = next_head;
                     }
                 }
+            } else if (_rx_packet.status == STATUS_SYS_INFO) {
+                SpiSysInfoPayload* sys_info = (SpiSysInfoPayload*)_rx_packet.payload;
+                boot_menu.update_sys_info(sys_info->wifi_status, sys_info->fw_version, sys_info->sd_status, sys_info->tz_name);
+                rtc.sync_time(sys_info->ntp_timestamp);
             }
         }
     }
