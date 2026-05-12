@@ -12,6 +12,7 @@
 #include "boot_menu.h"
 #include "cocosdc.h"
 #include "spi_stream.h"
+#include "esp32_bridge.h"
 
 // Hardware Pin Definitions
 #define PIN_E_CLOCK 21

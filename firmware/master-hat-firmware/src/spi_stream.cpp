@@ -1,5 +1,7 @@
 #include "spi_stream.h"
 
+volatile bool spi_bus_locked = false;
+
 // Hardware SPI pins for Coprocessor
 #define PIN_SPI_MISO 23
 #define PIN_SPI_MOSI 24
@@ -26,6 +28,10 @@ void SpiStream::begin() {
 
 void SpiStream::tick() {
     uint32_t now = millis();
+    if (spi_bus_locked) {
+        return; // Skip this polling cycle if Esp32Bridge is using the bus
+    }
+    
     if (now - _last_poll_time < POLL_INTERVAL_MS) {
         return;
     }

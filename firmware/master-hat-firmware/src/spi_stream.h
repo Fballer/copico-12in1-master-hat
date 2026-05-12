@@ -3,6 +3,8 @@
 #include <SPI.h>
 #include "spi_protocol.h"
 
+extern volatile bool spi_bus_locked;
+
 // 256-byte ring buffers for serial data
 #define SPI_STREAM_BUFFER_SIZE 256
 

@@ -1,5 +1,7 @@
 #include "esp32_bridge.h"
 
+extern volatile bool spi_bus_locked;
+
 // Define the SPI pins (From Phase 10 Refactor / Phase 7 Build Guide)
 #define BRIDGE_MISO 23
 #define BRIDGE_MOSI 24
@@ -37,6 +39,8 @@ void Esp32Bridge::transfer(const uint8_t* tx_buf, uint8_t* rx_buf, size_t len) {
 }
 
 bool Esp32Bridge::transaction(SpiMasterPacket* tx_packet, SpiSlavePacket* rx_packet) {
+    spi_bus_locked = true;
+    
     // 1. Send the primary packet
     tx_packet->sync = SPI_SYNC_BYTE;
     tx_packet->checksum = calc_checksum((uint8_t*)tx_packet, sizeof(SpiMasterPacket) - 1);
@@ -56,6 +60,7 @@ bool Esp32Bridge::transaction(SpiMasterPacket* tx_packet, SpiSlavePacket* rx_pac
         // If we received a valid response on the first try, break
         if (rx_packet->sync == SPI_SYNC_BYTE && calc_checksum((uint8_t*)rx_packet, sizeof(SpiSlavePacket) - 1) == rx_packet->checksum) {
             if (rx_packet->status != STATUS_SDC_BUSY) {
+                spi_bus_locked = false;
                 return true; // Valid terminal status
             }
         }
@@ -67,6 +72,7 @@ bool Esp32Bridge::transaction(SpiMasterPacket* tx_packet, SpiSlavePacket* rx_pac
         transfer((uint8_t*)&poll_packet, (uint8_t*)rx_packet, sizeof(SpiMasterPacket));
     }
     
+    spi_bus_locked = false;
     return false; // Timeout
 }
 
@@ -97,7 +103,7 @@ bool Esp32Bridge::sdc_write_sector(uint8_t drive_id, uint32_t lsn, const uint8_t
     memset(&tx, 0, sizeof(tx));
     
     tx.command = CMD_SDC_WRITE;
-    tx.length = 4 + 256;
+    tx.length = 0; // Length is implied 260 bytes for SDC_WRITE
     tx.payload[0] = drive_id;
     tx.payload[1] = (lsn >> 16) & 0xFF;
     tx.payload[2] = (lsn >> 8) & 0xFF;
