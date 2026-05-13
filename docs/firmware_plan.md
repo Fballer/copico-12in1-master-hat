@@ -6,7 +6,7 @@ This document details the software architecture and development roadmap for the 
 > [!IMPORTANT]
 > This plan assumes the hardware is built according to the [Hardware Assembly Guide](file:///Users/macbook/.gemini/antigravity/brain/01be4bfb-ce62-4b38-8036-e57a2e46b2b8/hardware_build_guide.md).
 
-## 1. System Philosophy: The "Chameleon" Expansion
+## 1. System Philosophy: The "CoPico X-BIOS" Expansion
 The RP2350 acts as a real-time bridge between the CoCo's 6809 bus and modern peripherals. By dynamically swapping PIO state machines and memory maps, a single physical board becomes 10 different classic cartridges.
 
 > [!IMPORTANT]

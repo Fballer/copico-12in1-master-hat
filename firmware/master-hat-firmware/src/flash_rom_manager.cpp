@@ -9,7 +9,7 @@
 #include "hardware/flash.h"
 #include "hardware/sync.h"
 #include "pico/multicore.h"
-#include "../bios/chameleon_rom.h"   // auto-generated from chameleon.bin
+#include "../bios/xbios_rom.h"   // auto-generated from xbios.asm
 #include <string.h>
 
 FlashRomManager flash_rom;
@@ -169,21 +169,21 @@ bool FlashRomManager::load_rom_to_buffer(uint8_t slot, uint8_t* buffer,
 }
 
 // ================================================================
-// init_factory_defaults()
+// CoPico X-BIOS Placeholder (Slot 0)
 // ================================================================
 // Called once per boot. Ensures embedded ROMs are in their slots.
 // DOES NOT touch Slot 1 (SDC-DOS) — that is user-supplied via SD.
 // DOES NOT re-flash if the version matches what is already there.
 // ================================================================
 void FlashRomManager::init_factory_defaults() {
-    // --- Slot 0: Chameleon BIOS (embedded via build_bios.py) ---
-    if (is_slot_empty(SLOT_CHAMELEON)) {
-        Serial.println("[Flash] Installing Chameleon BIOS to Slot 0...");
-        install_rom(SLOT_CHAMELEON,
-                    chameleon_bios_bin,
-                    sizeof(chameleon_bios_bin),
+    // --- Slot 0: CoPico X-BIOS (embedded via build_bios.py) ---
+    if (is_slot_empty(SLOT_XBIOS)) {
+        Serial.println("[Flash] Installing CoPico X-BIOS to Slot 0...");
+        install_rom(SLOT_XBIOS,
+                    copico_xbios_bin,
+                    sizeof(copico_xbios_bin),
                     0xC000,
-                    "Chameleon BIOS",
+                    "CoPico X-BIOS",
                     1);
     }
 

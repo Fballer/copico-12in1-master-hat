@@ -3,13 +3,13 @@
 
 Welcome to the Copico 12-in-1 Master Hat! This expansion seamlessly turns your Tandy Color Computer into a powerhouse equipped with networking, SD card storage, advanced audio, and high-resolution MSX2+ graphics.
 
-This guide explains how to use the **Chameleon BIOS**, the native configuration menu that appears when you boot the CoCo.
+This guide explains how to use the **CoPico X-BIOS BIOS**, the native configuration menu that appears when you boot the CoCo.
 
 ---
 
 ## 1. The Main Menu
 
-When you power on your CoCo with the Master Hat attached, you are greeted by the **Chameleon BIOS Main Menu**. This screen provides an overview of your current hardware configuration and lets you dynamically swap emulated cartridge modes on the fly.
+When you power on your CoCo with the Master Hat attached, you are greeted by the **CoPico X-BIOS BIOS Main Menu**. This screen provides an overview of your current hardware configuration and lets you dynamically swap emulated cartridge modes on the fly.
 
 ### Dynamic Configuration Toggles
 The bottom half of the screen lists the available configuration toggles. Use the keyboard to cycle through the options for each category.

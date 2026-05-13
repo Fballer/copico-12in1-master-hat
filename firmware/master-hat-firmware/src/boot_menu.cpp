@@ -1,6 +1,6 @@
 #include "boot_menu.h"
 #include <string.h>
-#include "../bios/chameleon_rom.h"
+#include "../bios/xbios_rom.h"
 #include "flash_rom_manager.h"
 
 BootMenu::BootMenu() {
@@ -37,14 +37,14 @@ uint8_t BootMenu::read_rom(uint16_t address) {
             return tz_status[address - 0xD860];
         }
 
-        // Flash ROM status byte ($D880) — read by Chameleon BIOS
+        // Flash ROM status byte ($D880) — read by CoPico X-BIOS
         // to trigger "Setup Required" messages for missing ROMs.
         if (address == 0xD880) {
             return flash_rom.status_flags;
         }
 
         // Return from auto-generated ROM array
-        return chameleon_bios_bin[address - 0xC000];
+        return copico_xbios_bin[address - 0xC000];
     }
     return 0xFF; // Default open bus
 }

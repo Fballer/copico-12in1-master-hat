@@ -12,7 +12,7 @@
 // Layout (each slot = 16KB = 16384 bytes):
 //
 //   System Slots (pre-loaded from firmware or SD):
-//     Slot 0: Chameleon BIOS  (Embedded - user's own code)
+//     Slot 0: CoPico X-BIOS   (Embedded - user's own code)
 //     Slot 1: SDC-DOS         (Auto-install from /ROMS/COCOSDC.ROM)
 //     Slot 2: FujiNet BIOS    (Embedded - open source)
 //     Slot 3: RS-232 Pak ROM  (Embedded - abandonware)
@@ -33,7 +33,7 @@
 #define FLASH_ROM_MAX_SLOTS     12
 
 // Slot index constants
-#define SLOT_CHAMELEON  0   // Chameleon Boot Menu BIOS
+#define SLOT_XBIOS      0   // CoPico X-BIOS Boot Menu BIOS
 #define SLOT_COCOSDC    1   // SDC-DOS (user supplied via SD)
 #define SLOT_FUJINET    2   // FujiNet BIOS (open source, embedded)
 #define SLOT_RS232      3   // RS-232 Pak ROM (abandonware, embedded)

@@ -1,5 +1,5 @@
 *******************************************************************************
-* Phase 13 - Chameleon BIOS v6
+* Phase 13 - CoPico X-BIOS v1.0
 * Toggle marker $01 in strings switches between normal/inverse rendering
 *******************************************************************************
 
@@ -1122,7 +1122,7 @@ PNNM_DONE:  RTS
 * STRINGS - $01 = toggle marker for PSTR_T
 *******************************************************************************
 
-STR_TITLE   FCC     "    COPICO 12-IN-1 MASTER HAT  "
+STR_TITLE   FCC     "    COPICO X-BIOS MASTER HAT   "
             FCB     0
 
 STR_CUR_HDR FCC     "-------CURRENT SETTINGS--------"

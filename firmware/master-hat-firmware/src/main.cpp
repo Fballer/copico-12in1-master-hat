@@ -103,17 +103,17 @@ void setup() {
     uint8_t saved_mode = EEPROM.read(0);
     if (saved_mode >= MODE_MAX) saved_mode = (uint8_t)MODE_BOOT_MENU;
 
-    // G19 held at power-on → force Chameleon Boot Menu (Slot 0)
+    // G19 held at power-on → force CoPico X-BIOS (Slot 0)
     // This is the user's "panic button" to recover from any misconfiguration.
     if (digitalRead(PIN_BTN_DUAL) == LOW) {
         current_mode = MODE_BOOT_MENU;
-        Serial.println("[Boot] G19 held → forcing Chameleon Boot Menu");
+        Serial.println("[Boot] G19 held → forcing CoPico X-BIOS Menu");
     } else if (flash_rom.status_flags & FLASH_STATUS_SDC_MISSING &&
                saved_mode == MODE_COCOSDC) {
         // SDC-DOS is not in flash and the user wants CoCoSDC mode.
-        // Boot to the Chameleon Menu so it can display the setup message.
+        // Boot to the CoPico X-BIOS Menu so it can display the setup message.
         current_mode = MODE_BOOT_MENU;
-        Serial.println("[Boot] SDC-DOS missing → forcing Boot Menu for setup alert");
+        Serial.println("[Boot] SDC-DOS missing → forcing CoPico X-BIOS for setup alert");
     } else {
         current_mode = (EmulatorMode)saved_mode;
         Serial.print("[Boot] Restored mode: ");
