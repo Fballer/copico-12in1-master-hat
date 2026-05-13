@@ -1,7 +1,7 @@
-# Copico 10-in-1 Master Hat: Hardware Assembly Guide
+# Copico 12-in-1 Master Hat: Hardware Assembly Guide
 **Date: May 2026 — Verified against PCB Netlist (Hat-Fuji-40C v1)**
 
-This guide provides the complete Bill of Materials (BOM) and wiring instructions for the **10-in-1 Master Hat** built on the **Centipede 32z** board.
+This guide provides the complete Bill of Materials (BOM) and wiring instructions for the **12-in-1 Master Hat** built on the **Centipede 32z** board.
 
 > [!IMPORTANT]
 > This hardware is designed to work in tandem with the [Firmware Architecture Plan](./firmware_plan.md).

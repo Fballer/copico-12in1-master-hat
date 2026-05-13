@@ -1,13 +1,13 @@
-# Copico 10-in-1 Master Hat: Firmware Architecture & Implementation Plan
+# Copico 12-in-1 Master Hat: Firmware Architecture & Implementation Plan
 **Date: May 2026 — Updated with verified PCB netlist (Hat-Fuji-40C v1)**
 
-This document details the software architecture and development roadmap for the **10-in-1 Master Hat**. It leverages the RP2350 dual-core processor to emulate an entire suite of CoCo expansions.
+This document details the software architecture and development roadmap for the **12-in-1 Master Hat**. It leverages the RP2350 dual-core processor to emulate an entire suite of CoCo expansions.
 
 > [!IMPORTANT]
 > This plan assumes the hardware is built according to the [Hardware Assembly Guide](file:///Users/macbook/.gemini/antigravity/brain/01be4bfb-ce62-4b38-8036-e57a2e46b2b8/hardware_build_guide.md).
 
 ## 1. System Philosophy: The "CoPico X-BIOS" Expansion
-The RP2350 acts as a real-time bridge between the CoCo's 6809 bus and modern peripherals. By dynamically swapping PIO state machines and memory maps, a single physical board becomes 10 different classic cartridges.
+The RP2350 acts as a real-time bridge between the CoCo's 6809 bus and modern peripherals. By dynamically swapping PIO state machines and memory maps, a single physical board becomes 12 different classic cartridges.
 
 > [!IMPORTANT]
 > **LOCAL SPECIFICATIONS FIRST**: The technical "guts" (registers, ports, and protocols) for these modules have been saved directly to this project. **Reference these local files first** during the firmware build to ensure we stay offline and fast.
@@ -90,12 +90,17 @@ We will develop each module in isolation, hardcoding the RP2350 for testing befo
     *   **MOSI**: RP2350 **G31** ↔ ESP32 **GPIO1** (J4 Pin 16)
 *   **Personality Swapping**: Selecting a menu item triggers a "hot-swap" of the RP2350's memory mapping.
 
-### ROM Management Strategy (SD Card Loading)
-The Boot Menu will provide specific ROM options for the $C000-$DFFF address space, depending on the selected hardware emulation:
-1.  **Slot 1: Standard RSDOS**: (Hardcoded). Used only if passing through to physical hardware.
-2.  **Slot 2: SDC DOS**: (Hardcoded). Heavily modified disk ROM required for the CoCoSDC emulation.
-3.  **Slot 3: HDB-DOS**: (Hardcoded). Required for DriveWire and FujiNet wireless disk emulation.
-4.  **Slot 4: Custom User ROM**: The menu will scan a `/ROMS/` folder on the MicroSD card. Users can drop any `.rom` file (e.g., NitrOS-9 boot ROMs, diagnostics) into this folder via their PC, and the RP2350 will dynamically load it into emulation memory.
+### ROM Management Strategy (16KB Flash Bank Architecture)
+The CoPico X-BIOS leverages a robust 256KB flash bank (12 slots of 16KB) for instant-on performance and hardware-accurate bank switching:
+
+1.  **Slot 0: CoPico X-BIOS**: (Embedded). The system's primary control menu.
+2.  **Slot 1: SDC-DOS**: (Auto-installed). Required for CoCoSDC disk emulation. Installed from SD card on first boot to maintain legal compliance.
+3.  **Slot 2: FujiNet BIOS**: (Embedded). Networking ROM for the ESP32 bridge.
+4.  **Slot 3: RS-232 Pak ROM**: (Embedded). Deluxe RS-232 ROM for terminal communication.
+5.  **Slots 4-11: CoCoSDC Banks**: Emulates the 8-bank hardware array. Bank 0 (Slot 4) defaults to SDC-DOS; Bank 1 (Slot 5) defaults to Disk BASIC 1.1.
+
+*   **Recovery Mode**: Powering on while holding **G19** (Dual Button) forces an immediate bypass to the CoPico X-BIOS (Slot 0), allowing recovery from a soft-bricked state.
+*   **Bank Switching**: Responds to `RUN @n` commands via the PIO bus sniffer, mirroring the real CoCoSDC hardware behavior.
 
 ### Bus Timing: Hybrid Fast-Map I/O Dispatch
 
