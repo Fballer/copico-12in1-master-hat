@@ -12,9 +12,8 @@ The **Copico 12-in-1 Master Hat** is the ultimate expansion for the Tandy Color 
 7.  **DriveWire 4**: Wireless virtual serial disk streaming.
 8.  **FujiNet**: Cloud-based sector streaming and network tools.
 9.  **Real-Time Clock**: DS3231-based system clock.
-10. **Lark MIDI Pak**: 6850 ACIA MIDI via hardware expansion header.
-11. **SuperSprite FM+**: TMS9918 video + OPL2 FM synthesis sound.
-12. **Multi-Cart Menu**: Software-based personality swapping via Native VDG menu.
+10. **SuperSprite FM+**: TMS9918 video + OPL2 FM synthesis sound.
+11. **CoPico X-BIOS**: Software-based personality swapping via Native VDG menu.
 
 ## 📂 Repository Structure
 *   `hardware/`: KiCad project files and Gerber archives.

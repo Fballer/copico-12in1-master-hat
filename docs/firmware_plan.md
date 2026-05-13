@@ -24,8 +24,7 @@ The RP2350 acts as a real-time bridge between the CoCo's 6809 bus and modern per
 | **WiModem** | AT Command Modem | [Reference: Zimodem Firmware](https://github.com/boisy/Zimodem) \| [GitHub: GuruModem](https://github.com/pizet/GuruModem) |
 | **Real-Time Clock** | MSM5832 Emulation | [Library: DS3231 I2C](https://github.com/adafruit/Adafruit_DS3231) \| [GitHub: CoCo RTC Driver](https://github.com/boisy/NitrOS-9/blob/master/sys/modules/rtc3231.as) |
 | **SuperSprite FM+** | TMS9918 + OPL2 | [Reference: TMS9918 Datasheet](https://www.msxarchive.nl/pub/msx/mirrors/hansa.xs4all.nl/tms9918.pdf) \| [GitHub: OPL2 Emulator](https://github.com/D-S-X/OPL2-Emulation) |
-| **Lark MIDI Pak** | 6850 ACIA | [Reference: MIDI 1.0 Spec](https://www.midi.org/specifications-old/item/the-midi-1-0-specification) \| Emulates hardware MIDI through the 4-pin expansion header. |
-| **Boot Menu** | Injected 6809 Code | [Source: FujiNet Config Application](https://github.com/FujiNetWIFI/fujinet-config) \| [GitHub: Mega-Cart](https://github.com/sublogic/MegaCart) |
+| **CoPico X-BIOS** | Injected 6809 Code | [Source: FujiNet Config Application](https://github.com/FujiNetWIFI/fujinet-config) \| [GitHub: Mega-Cart](https://github.com/sublogic/MegaCart) |
 
 ---
 

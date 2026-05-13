@@ -235,15 +235,5 @@ This guide provides the complete Bill of Materials (BOM) and wiring instructions
 1.  **BOOT_Switch**: J3 Pin 15 (**G17**) ➔ Toggle Switch ➔ GND.
 2.  **Future Reset**: A pad is available on the PCB connected to **J3 Pin 18 (RESET)** for a future hard-wired link to the ESP32 EN pin. Initial reset is via software handshake.
 
-### Phase 7: MIDI Expansion Header
-Since full 5-pin DIN MIDI jacks and optoisolators are too large for the Hat, we provide a breakout header. You can plug a standard "Arduino MIDI Shield/Module" into this header later.
-1.  **Hardware**: Place a 1x4 Male Header (2.54mm) on the PCB.
-2.  **Wiring**:
-    *   Pin 1 ➔ **3.3V** (Sourced directly from the main VCC rail between J3 and J4)
-    *   Pin 2 ➔ GND
-    *   Pin 3 ➔ **J4 Pin 3 (G21)** (MIDI TX)
-    *   Pin 4 ➔ **J4 Pin 1 (G20)** (MIDI RX)
-
----
 > [!TIP]
 > **Check your work!** Continuity test 3.3V, 5V, and GND for shorts before power-on.
