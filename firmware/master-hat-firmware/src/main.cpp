@@ -16,6 +16,7 @@
 #include "esp32_bridge.h"
 #include "rtc.h"
 #include "io_dispatch.h"
+#include "flash_rom_manager.h"
 
 // ==========================================================
 // Hardware Pin Definitions — Verified against PCB Netlist
@@ -91,17 +92,31 @@ void setup() {
     digitalWrite(PIN_STATUS_LED, LOW);
     delay(50); // Debounce settle
     
+    // ================================================================
+    // Flash ROM Bank Init — Must happen before mode selection.
+    // Installs factory ROMs (Chameleon, FujiNet, RS-232, Disk BASIC)
+    // into flash on first boot. SDC-DOS is handled separately via SD.
+    // ================================================================
+    flash_rom.init_factory_defaults();
+
     EEPROM.begin(512);
     uint8_t saved_mode = EEPROM.read(0);
-    if (saved_mode > MODE_MAX) saved_mode = (uint8_t)MODE_COCOSDC;
-    
-    // Check if button is held during boot
+    if (saved_mode >= MODE_MAX) saved_mode = (uint8_t)MODE_BOOT_MENU;
+
+    // G19 held at power-on → force Chameleon Boot Menu (Slot 0)
+    // This is the user's "panic button" to recover from any misconfiguration.
     if (digitalRead(PIN_BTN_DUAL) == LOW) {
         current_mode = MODE_BOOT_MENU;
-        Serial.println("Booting to: BOOT MENU (Button Held)");
+        Serial.println("[Boot] G19 held → forcing Chameleon Boot Menu");
+    } else if (flash_rom.status_flags & FLASH_STATUS_SDC_MISSING &&
+               saved_mode == MODE_COCOSDC) {
+        // SDC-DOS is not in flash and the user wants CoCoSDC mode.
+        // Boot to the Chameleon Menu so it can display the setup message.
+        current_mode = MODE_BOOT_MENU;
+        Serial.println("[Boot] SDC-DOS missing → forcing Boot Menu for setup alert");
     } else {
         current_mode = (EmulatorMode)saved_mode;
-        Serial.print("Booting to Saved Mode: ");
+        Serial.print("[Boot] Restored mode: ");
         Serial.println(current_mode);
     }
     

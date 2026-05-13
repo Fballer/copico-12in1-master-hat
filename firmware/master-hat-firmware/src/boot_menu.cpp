@@ -1,7 +1,7 @@
 #include "boot_menu.h"
-
 #include <string.h>
 #include "../bios/chameleon_rom.h"
+#include "flash_rom_manager.h"
 
 BootMenu::BootMenu() {
     memset(wifi_status, 0, sizeof(wifi_status));
@@ -37,6 +37,12 @@ uint8_t BootMenu::read_rom(uint16_t address) {
             return tz_status[address - 0xD860];
         }
 
+        // Flash ROM status byte ($D880) — read by Chameleon BIOS
+        // to trigger "Setup Required" messages for missing ROMs.
+        if (address == 0xD880) {
+            return flash_rom.status_flags;
+        }
+
         // Return from auto-generated ROM array
         return chameleon_bios_bin[address - 0xC000];
     }
@@ -64,6 +70,7 @@ EmulatorMode BootMenu::calculate_mode() {
     if (reg_comm == 1) return MODE_RS232_PAK_LEGACY;
     if (reg_comm == 3) return MODE_WIMODEM;
 
-    // Default fallback if everything is Regular CoCo (0)
-    return MODE_COCOSDC;
+    // Default: if nothing is configured, show the Boot Menu
+    // so the user is never left at a blank screen.
+    return MODE_BOOT_MENU;
 }
