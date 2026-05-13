@@ -2,14 +2,17 @@
 #define EMULATOR_MODE_H
 
 enum EmulatorMode {
-    MODE_BOOT_MENU,
-    MODE_ORCH90,
-    MODE_SPEECH_SOUND,
-    MODE_RS232_PAK_LEGACY,
-    MODE_RS232_PAK_TURBO,
-    MODE_WORDPAK2,
-    MODE_COCOSDC,
-    MODE_WIMODEM
+    MODE_BOOT_MENU,           // Chameleon BIOS (Slot 0) — always in flash
+    MODE_ORCH90,              // Orchestra-90 stereo audio
+    MODE_SPEECH_SOUND,        // Speech/Sound Pak
+    MODE_RS232_PAK_LEGACY,    // RS-232 Pak, 2400 baud
+    MODE_RS232_PAK_TURBO,     // RS-232 Pak, 115200 baud
+    MODE_WORDPAK2,            // WordPak II+ 80-col VGA
+    MODE_COCOSDC,             // CoCoSDC disk emulation (SD card required)
+    MODE_FUJINET,             // FujiNet BIOS (Slot 2)
+    MODE_WIMODEM,             // WiModem (WiFi modem)
+    MODE_INTERNAL_ROM,        // Pass-through: Hat tri-states, CoCo uses its own ROMs
+    MODE_MAX                  // Sentinel — must always be last
 };
 
 #endif // EMULATOR_MODE_H

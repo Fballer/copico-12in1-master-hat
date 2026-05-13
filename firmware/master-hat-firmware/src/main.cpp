@@ -393,8 +393,21 @@ void switch_mode(EmulatorMode new_mode) {
         case MODE_COCOSDC:
             cocosdc.init();
             break;
+        case MODE_FUJINET:
+            // Load FujiNet BIOS (Slot 2) from flash into shadow RAM.
+            // The io_dispatch read handler will serve it to the CoCo bus.
+            flash_rom.load_rom_to_buffer(SLOT_FUJINET,
+                                         io_dispatch_get_shadow_buffer(),
+                                         nullptr, nullptr);
+            break;
         case MODE_WIMODEM:
             wimodem.init(true); // Always turbo mode for wimodem
+            break;
+        case MODE_INTERNAL_ROM:
+            // Hat goes fully silent — all data bus pins go tri-state.
+            // The CoCo boots using its own internal Color BASIC ROMs.
+            // io_dispatch handles this by simply not asserting /OE.
+            Serial.println("[Mode] Internal ROM — Hat tri-stated");
             break;
         case MODE_ORCH90:
         case MODE_SPEECH_SOUND:
