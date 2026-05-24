@@ -1,0 +1,41 @@
+{
+  "folders": [
+    {
+      "name": "12in1-master-hat",
+      "path": "."
+    },
+    {
+      "name": "lwtools (BIOS build)",
+      "path": "../lwtools-4.21"
+    },
+    {
+      "name": "bonobo (Centipede reference)",
+      "path": "../copico-bonobo-main"
+    }
+  ],
+  "settings": {
+    "files.exclude": {
+      "hardware": true,
+      "**/.pio": true,
+      "**/Gerbers/**": true,
+      "**/production/**": true,
+      "**/production-32z/**": true,
+      "**/*-backups/**": true,
+      "**/*.pretty": true,
+      "**/*.3dshapes": true
+    },
+    "search.exclude": {
+      "hardware/**": true,
+      "**/.pio": true,
+      "**/Gerbers/**": true,
+      "**/production/**": true,
+      "**/production-32z/**": true,
+      "**/*-backups/**": true,
+      "**/*.gbr": true,
+      "**/*.kicad_pcb": true,
+      "**/*.zip": true,
+      "../lwtools-4.21/test/**": true,
+      "../lwtools-4.21/docs/**": true
+    }
+  }
+}

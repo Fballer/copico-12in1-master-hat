@@ -1,0 +1,7 @@
+# Old FujiNet-era KiCad in this repo — not the hat you built.
+# Authoritative wiring: docs/schematic_copico10in1-fixed_2026-05-24.png, docs/pinmap.md
+hardware/
+
+# PlatformIO build artifacts
+.pio/
+**/.pio/

@@ -4,7 +4,7 @@
 This document details the software architecture and development roadmap for the **12-in-1 Master Hat**. It leverages the RP2350 dual-core processor to emulate an entire suite of CoCo expansions.
 
 > [!IMPORTANT]
-> This plan assumes the hardware is built according to the [Hardware Assembly Guide](file:///Users/macbook/.gemini/antigravity/brain/01be4bfb-ce62-4b38-8036-e57a2e46b2b8/hardware_build_guide.md).
+> This plan assumes the hardware is built according to the [Hardware Assembly Guide](build_guide.md) and [pin map](pinmap.md) (see [schematic](schematic_copico10in1-fixed_2026-05-24.png)).
 
 ## 1. System Philosophy: The "CoPico X-BIOS" Expansion
 The RP2350 acts as a real-time bridge between the CoCo's 6809 bus and modern peripherals. By dynamically swapping PIO state machines and memory maps, a single physical board becomes 12 different classic cartridges.
@@ -14,11 +14,11 @@ The RP2350 acts as a real-time bridge between the CoCo's 6809 bus and modern per
 
 | Emulation Mode | Core Hardware | Technical Reference / Repository |
 | :--- | :--- | :--- |
-| **Orchestra-90** | 8-bit Mono DAC | [Archive: Orch-90 Manual](https://colorcomputerarchive.com/repo/Documents/Manuals/Hardware/Orchestra-90%20(Tandy).pdf) \| **[LOCAL: Peripherals Specs](file:///Users/macbook/Documents/PlatformIO/Projects/copico/copico-bonobo-main/v3.1-centipede/hat-fuji-40c/references/peripherals_specs.md)** |
+| **Orchestra-90** | 8-bit Mono DAC | [Archive: Orch-90 Manual](https://colorcomputerarchive.com/repo/Documents/Manuals/Hardware/Orchestra-90%20(Tandy).pdf) \| **[LOCAL: Peripherals Specs](../references/peripherals_specs.md)** |
 | **Speech & Sound** | AY-3-8910 (PSG) | [GitHub: AY-3-8910 Emulation](https://github.com/mamedev/mame/blob/master/src/devices/sound/ay8910.cpp) \| [GitHub: LibAYemu](https://github.com/vsergeev/libayemu) |
-| **RS-232 Pak** | ACIA 6551 | [Reference: 6551 Datasheet](https://www.westerndesigncenter.com/wdc/documentation/w65c51n.pdf) \| **[LOCAL: Peripherals Specs](file:///Users/macbook/Documents/PlatformIO/Projects/copico/copico-bonobo-main/v3.1-centipede/hat-fuji-40c/references/peripherals_specs.md)** |
-| **WordPak 2+** | Yamaha V9958 | [Source: CoCoLoCo WordPak-2](https://sites.google.com/site/tandycocoloco/wordpak-2) \| **[LOCAL: V9958 Specs](file:///Users/macbook/Documents/PlatformIO/Projects/copico/copico-bonobo-main/v3.1-centipede/hat-fuji-40c/references/wordpak2/v9958_specs.md)** |
-| **CoCoSDC** | Custom FDC | [Blog: CoCoSDC Official](http://cocosdc.blogspot.com/) \| **[LOCAL: CoCoSDC Specs](file:///Users/macbook/Documents/PlatformIO/Projects/copico/copico-bonobo-main/v3.1-centipede/hat-fuji-40c/references/cocosdc/cocosdc_specs.md)** |
+| **RS-232 Pak** | ACIA 6551 | [Reference: 6551 Datasheet](https://www.westerndesigncenter.com/wdc/documentation/w65c51n.pdf) \| **[LOCAL: Peripherals Specs](../references/peripherals_specs.md)** |
+| **WordPak 2+** | Yamaha V9958 | [Source: CoCoLoCo WordPak-2](https://sites.google.com/site/tandycocoloco/wordpak-2) \| **[LOCAL: V9958 Specs](../references/wordpak2/v9958_specs.md)** |
+| **CoCoSDC** | Custom FDC | [Blog: CoCoSDC Official](http://cocosdc.blogspot.com/) \| **[LOCAL: CoCoSDC Specs](../references/cocosdc/cocosdc_specs.md)** |
 | **FujiNet** | ESP32 Networking | [GitHub: FujiNet PlatformIO](https://github.com/FujiNetWIFI/fujinet-platformio) \| [GitHub: fujinet-firmware](https://github.com/FujiNetWIFI/fujinet-firmware) |
 | **DriveWire 4** | Virtual Serial Disk | [Source: DriveWire 4](http://www.drivewire4.com/) \| [GitHub: pyDriveWire](https://github.com/n64764/pyDriveWire) |
 | **WiModem** | AT Command Modem | [Reference: Zimodem Firmware](https://github.com/boisy/Zimodem) \| [GitHub: GuruModem](https://github.com/pizet/GuruModem) |
