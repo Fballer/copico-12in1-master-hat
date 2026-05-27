@@ -234,7 +234,11 @@ void loop() {
     } else if (current_mode == MODE_WIMODEM) {
         spi_wimodem_stream.tick();
     } else if (current_mode == MODE_BOOT_MENU) {
-        // Heartbeat LED
+        boot_menu.service_flash_command();
+        EmulatorMode pending_mode;
+        if (boot_menu.consume_pending_mode_switch(&pending_mode)) {
+            switch_mode(pending_mode);
+        }
 #ifdef PICO_DEFAULT_LED_PIN
         digitalWrite(PICO_DEFAULT_LED_PIN, (millis() / 500) % 2);
 #endif
@@ -321,6 +325,12 @@ void loop1() {
         // Special: Boot Menu config registers (system-level, inline)
         if (current_mode == MODE_BOOT_MENU && addr >= 0xFF70 && addr <= 0xFF73) {
             boot_menu.set_config(addr, (uint8_t)data);
+            return;
+        }
+
+        // Flash ROM utility command ($FF76) from CoPico X-BIOS options menu
+        if (current_mode == MODE_BOOT_MENU && addr == 0xFF76) {
+            boot_menu.set_flash_command((uint8_t)data);
             return;
         }
 

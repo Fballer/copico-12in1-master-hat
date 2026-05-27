@@ -6,6 +6,7 @@
 // ================================================================
 
 #include "flash_rom_manager.h"
+#include "esp32_bridge.h"
 #include "hardware/flash.h"
 #include "hardware/sync.h"
 #include "pico/multicore.h"
@@ -175,9 +176,52 @@ bool FlashRomManager::load_rom_to_buffer(uint8_t slot, uint8_t* buffer,
 // DOES NOT touch Slot 1 (SDC-DOS) — that is user-supplied via SD.
 // DOES NOT re-flash if the version matches what is already there.
 // ================================================================
-void FlashRomManager::init_factory_defaults() {
+void FlashRomManager::erase_slot(uint8_t slot) {
+    if (slot >= FLASH_ROM_MAX_SLOTS) return;
+    uint32_t flash_addr = get_flash_addr(slot);
+    multicore_lockout_start_blocking();
+    uint32_t ints = save_and_disable_interrupts();
+    flash_range_erase(flash_addr, FLASH_ROM_SLOT_SIZE);
+    restore_interrupts(ints);
+    multicore_lockout_end_blocking();
+    Serial.print("[Flash] Erased slot ");
+    Serial.println(slot);
+}
+
+void FlashRomManager::clear_user_slots() {
+    erase_slot(SLOT_COCOSDC);
+    for (uint8_t bank = 2; bank < BANK_COUNT; bank++) {
+        erase_slot(bank_to_slot(bank));
+    }
+    status_flags |= FLASH_STATUS_SDC_MISSING;
+}
+
+bool FlashRomManager::install_cocosdc_from_sd() {
+    static uint8_t rom_buf[FLASH_ROM_SLOT_SIZE - 256];
+    size_t rom_size = 0;
+
+    if (!esp32.rom_fetch_file("/COCOSDC.ROM", rom_buf, sizeof(rom_buf), &rom_size)) {
+        if (!esp32.rom_fetch_file("/ROMS/COCOSDC.ROM", rom_buf, sizeof(rom_buf), &rom_size)) {
+            Serial.println("[Flash] COCOSDC.ROM not found on SD (root or /ROMS/)");
+            status_flags |= FLASH_STATUS_SDC_MISSING;
+            return false;
+        }
+    }
+
+    if (!install_rom(SLOT_COCOSDC, rom_buf, rom_size, 0xC000, "SDC-DOS", 1)) {
+        status_flags |= FLASH_STATUS_SDC_MISSING;
+        return false;
+    }
+
+    install_rom(bank_to_slot(0), rom_buf, rom_size, 0xC000, "SDC-DOS", 1);
+    status_flags &= ~FLASH_STATUS_SDC_MISSING;
+    Serial.println("[Flash] SDC-DOS installed from SD");
+    return true;
+}
+
+void FlashRomManager::init_factory_defaults(bool force_reinstall) {
     // --- Slot 0: CoPico X-BIOS (embedded via build_bios.py) ---
-    if (is_slot_empty(SLOT_XBIOS)) {
+    if (force_reinstall || is_slot_empty(SLOT_XBIOS)) {
         Serial.println("[Flash] Installing CoPico X-BIOS to Slot 0...");
         install_rom(SLOT_XBIOS,
                     copico_xbios_bin,
@@ -200,7 +244,7 @@ void FlashRomManager::init_factory_defaults() {
     // --- Slot 2: FujiNet BIOS ---
     // Full binary embedded when available; placeholder for now.
     // The ESP32 can download and install the real binary via the Boot Menu.
-    if (is_slot_empty(SLOT_FUJINET)) {
+    if (force_reinstall || is_slot_empty(SLOT_FUJINET)) {
         Serial.println("[Flash] Installing FujiNet placeholder to Slot 2...");
         install_rom(SLOT_FUJINET,
                     FUJINET_PLACEHOLDER,
@@ -211,7 +255,7 @@ void FlashRomManager::init_factory_defaults() {
     }
 
     // --- Slot 3: RS-232 Pak ROM (abandonware, same precedent as CoCoSDC) ---
-    if (is_slot_empty(SLOT_RS232)) {
+    if (force_reinstall || is_slot_empty(SLOT_RS232)) {
         Serial.println("[Flash] Installing RS-232 Pak ROM to Slot 3...");
         install_rom(SLOT_RS232,
                     rs232_pak_bin,
@@ -223,7 +267,7 @@ void FlashRomManager::init_factory_defaults() {
 
     // --- Bank 1 (Slot 5): Disk BASIC 1.1 ---
     // Same ROM pre-loaded on the original CoCoSDC hardware.
-    if (is_slot_empty(BANK_SDC_BASE + 1)) {
+    if (force_reinstall || is_slot_empty(BANK_SDC_BASE + 1)) {
         Serial.println("[Flash] Installing Disk BASIC 1.1 to Bank 1...");
         install_rom(BANK_SDC_BASE + 1,
                     disk_basic_11_bin,

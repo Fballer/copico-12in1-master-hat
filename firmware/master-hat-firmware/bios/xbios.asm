@@ -17,13 +17,23 @@ STATUS_BUF  EQU     $D800
 STATUS_FW   EQU     $D820
 STATUS_SD   EQU     $D840
 STATUS_TZ   EQU     $D860
+STATUS_FLASH EQU    $D880
+STATUS_RESULT EQU   $D881
 REG_AUDIO   EQU     $FF70
 REG_VIDEO   EQU     $FF71
 REG_DISK    EQU     $FF72
 REG_COMM    EQU     $FF73
 REG_RTC     EQU     $FF74
 REG_TZ      EQU     $FF75
+REG_FLASH_CMD EQU   $FF76
 REG_BOOT    EQU     $FF7F
+FLASH_CMD_SCAN    EQU 1
+FLASH_CMD_CLEAR   EQU 2
+FLASH_CMD_FACTORY EQU 3
+FLASH_CMD_INTERNAL EQU 9
+RESULT_BUSY       EQU 1
+RESULT_OK         EQU 2
+RESULT_ERR        EQU 3
 
             ORG     $C000
             FCC     "DK"
@@ -36,6 +46,8 @@ START:
             CLR     VAR_DISK
             CLR     VAR_COMM
             CLR     VAR_RTC
+
+            JSR     CHECK_SETUP
 
 MAIN_LOOP:
             LBSR    DRAW_MAIN
@@ -68,6 +80,10 @@ INPUT_LOOP:
             LBEQ    DO_OPTIONS
             CMPA    #'o'
             LBEQ    DO_OPTIONS
+            CMPA    #'I'
+            LBEQ    DO_INFO
+            CMPA    #'i'
+            LBEQ    DO_INFO
             CMPA    #13
             LBEQ    DO_BOOT
             BRA     INPUT_LOOP
@@ -90,7 +106,7 @@ DV_SAVE:    STA     VAR_VIDEO
 
 DO_DISK:    LDA     VAR_DISK
             INCA
-            CMPA    #3
+            CMPA    #4
             BNE     DD_SAVE
             CLRA
 DD_SAVE:    STA     VAR_DISK
@@ -117,6 +133,8 @@ DO_RTC:     LDA     VAR_RTC
             LBRA    MAIN_LOOP
 DO_OPTIONS:
             LBRA    OPTIONS_LOOP
+DO_INFO:
+            LBRA    LOOP_INFO
 DO_BOOT:
             LDA     VAR_AUDIO
             STA     REG_AUDIO
@@ -162,6 +180,8 @@ OPT_INPUT:
             LBEQ    LOOP_CLEAR
             CMPA    #'6'
             LBEQ    LOOP_TZ_PG1
+            CMPA    #'7'
+            LBEQ    LOOP_FLASH
             
             BRA     OPT_INPUT
 
@@ -187,6 +207,51 @@ LR_IN:      JSR     [POLCAT]
             CMPA    #'x'
             LBEQ    OPTIONS_LOOP
             BRA     LR_IN
+
+LOOP_INFO:  LBSR    DRAW_INFO
+LI_IN:      JSR     [POLCAT]
+            TSTA
+            BEQ     LI_IN
+            CMPA    #'X'
+            LBEQ    MAIN_LOOP
+            CMPA    #'x'
+            LBEQ    MAIN_LOOP
+            BRA     LI_IN
+
+LOOP_FLASH: LBSR    DRAW_FLASH
+LF_IN:      JSR     [POLCAT]
+            TSTA
+            BEQ     LF_IN
+            CMPA    #'X'
+            LBEQ    OPTIONS_LOOP
+            CMPA    #'x'
+            LBEQ    OPTIONS_LOOP
+            CMPA    #'S'
+            LBEQ    LF_SCAN
+            CMPA    #'s'
+            LBEQ    LF_SCAN
+            CMPA    #'C'
+            LBEQ    LF_CLEAR
+            CMPA    #'c'
+            LBEQ    LF_CLEAR
+            CMPA    #'R'
+            LBEQ    LF_FACTORY
+            CMPA    #'r'
+            LBEQ    LF_FACTORY
+            CMPA    #'I'
+            LBEQ    LF_INTERNAL
+            CMPA    #'i'
+            LBEQ    LF_INTERNAL
+            BRA     LF_IN
+LF_SCAN:    LDA     #FLASH_CMD_SCAN
+            BRA     LF_DO
+LF_CLEAR:   LDA     #FLASH_CMD_CLEAR
+            BRA     LF_DO
+LF_FACTORY: LDA     #FLASH_CMD_FACTORY
+            BRA     LF_DO
+LF_INTERNAL:LDA     #FLASH_CMD_INTERNAL
+LF_DO:      LBSR    FLASH_EXEC
+            LBRA    LOOP_FLASH
 
 LOOP_DIAG:  LBSR    DRAW_DIAG
 LD_IN:      JSR     [POLCAT]
@@ -360,6 +425,30 @@ TZ_SAVE_EXIT:
             LBRA    OPTIONS_LOOP
 
 *******************************************************************************
+* CHECK_SETUP - SDC-DOS missing alert ($D880 bit 0)
+*******************************************************************************
+CHECK_SETUP:
+            LDA     STATUS_FLASH
+            BITA    #1
+            BEQ     CS_DONE
+            LBSR    DRAW_SETUP
+CS_WAIT:    JSR     [POLCAT]
+            TSTA
+            BEQ     CS_WAIT
+CS_DONE:    RTS
+
+*******************************************************************************
+* FLASH_EXEC - trigger RP2350 flash utility, poll $D881
+*******************************************************************************
+FLASH_EXEC:
+            STA     REG_FLASH_CMD
+            LBSR    DRAW_SAVING
+FW_WAIT:    LDA     STATUS_RESULT
+            CMPA    #RESULT_BUSY
+            BEQ     FW_WAIT
+            RTS
+
+*******************************************************************************
 * DRAW_MAIN
 *******************************************************************************
 DRAW_MAIN:
@@ -374,17 +463,30 @@ DCLR:       STA     ,X+
             LDU     #$0400
             LBSR    PSTR_D
 
-            * Row 2: Header (dark)
-            LDX     #STR_CUR_HDR
-            LDU     #$0440
+            * Row 1: Subtitle (dark)
+            LDX     #STR_SUBTITLE
+            LDU     #$0420
             LBSR    PSTR_D
 
-            * Row 3: Status summary (normal)
+            * Row 2: blank separator (black)
+            LDU     #$0440
+            LDB     #32
+            LDA     #$20
+DM_BLANK:   STA     ,U+
+            DECB
+            BNE     DM_BLANK
+
+            * Row 3: Header (dark)
+            LDX     #STR_CUR_HDR
+            LDU     #$0460
+            LBSR    PSTR_D
+
+            * Row 4: Status summary (normal)
             LBSR    DRAW_STATUS
 
-            * Row 4: ROM info (normal)
+            * Row 5: ROM info (normal)
             LDX     #STR_ROM_LBL
-            LDU     #$0480
+            LDU     #$04A0
             LBSR    PSTR_N
             LDA     VAR_DISK
             BNE     DR4_1
@@ -393,9 +495,9 @@ DCLR:       STA     ,X+
 DR4_1:      LDX     #STR_ROM_NONE
 DR4_P:      LBSR    PSTR_N
 
-            * Row 5: WiFi info (normal)
+            * Row 6: WiFi info (normal)
             LDX     #STR_WIFI_LBL
-            LDU     #$04A0
+            LDU     #$04C0
             LBSR    PSTR_N
             LDX     #STR_WIFI_NA
             LBSR    PSTR_N
@@ -470,7 +572,11 @@ DRB_1:      CMPA    #1
             BNE     DRB_2
             LDX     #STR_VAL_FUJINET_D
             BRA     DRB_P
-DRB_2:      LDX     #STR_VAL_OFF
+DRB_2:      CMPA    #2
+            BNE     DRB_3
+            LDX     #STR_VAL_OFF
+            BRA     DRB_P
+DRB_3:      LDX     #STR_VAL_INTERNAL
 DRB_P:      LBSR    PSTR_N
 
             * Row 12: [R] RTC
@@ -494,7 +600,7 @@ DRC_P:      LBSR    PSTR_N
             LDU     #$05C0
             LBSR    PSTR_T
 
-            * Row 15: Options footer (toggle)
+            * Row 15: Options/Info footer (toggle)
             LDX     #STR_FOOT2
             LDU     #$05E0
             LBSR    PSTR_T
@@ -522,28 +628,32 @@ DOCLR:      STA     ,X+
             LDU     #$0440
             LBSR    PSTR_D
 
-            * Rows 4-8: Options (mixed)
+            * Rows 3-9: Options (mixed)
             LDX     #STR_OPT_1
-            LDU     #$0480
+            LDU     #$0460
             LBSR    PSTR_T
             
             LDX     #STR_OPT_2
-            LDU     #$04A0
+            LDU     #$0480
             LBSR    PSTR_T
             
             LDX     #STR_OPT_3
-            LDU     #$04C0
+            LDU     #$04A0
             LBSR    PSTR_T
             
             LDX     #STR_OPT_4
-            LDU     #$04E0
+            LDU     #$04C0
             LBSR    PSTR_T
             
             LDX     #STR_OPT_5
-            LDU     #$0500
+            LDU     #$04E0
             LBSR    PSTR_T
             
             LDX     #STR_OPT_6
+            LDU     #$0500
+            LBSR    PSTR_T
+
+            LDX     #STR_OPT_7
             LDU     #$0520
             LBSR    PSTR_T
 
@@ -552,14 +662,14 @@ DOCLR:      STA     ,X+
             LDU     #$0540
             LBSR    PSTR_D
 
-            * Row 11: ESC footer (mixed)
+            * Row 11: Return footer (mixed)
             LDX     #STR_OPT_FOOT
             LDU     #$0560
             LBSR    PSTR_T
 
-            * Row 13: ESP32 FW (normal)
+            * Row 12: ESP32 FW (normal)
             LDX     #STR_OPT_FW
-            LDU     #$05A0
+            LDU     #$0580
             LBSR    PSTR_N
             * Append firmware buffer
             LDX     #STATUS_FW
@@ -568,9 +678,9 @@ DOCLR:      STA     ,X+
             LDX     #STR_UNK
 DO_FW:      LBSR    PSTR_N_MAX
 
-            * Row 14: SD Card (normal)
+            * Row 13: SD Card (normal)
             LDX     #STR_OPT_SD
-            LDU     #$05C0
+            LDU     #$05A0
             LBSR    PSTR_N
             * Append SD buffer
             LDX     #STATUS_SD
@@ -630,7 +740,165 @@ DW_CLR:     STA     ,X+
             RTS
 
 *******************************************************************************
-* DRAW_ROM
+* DRAW_SETUP - missing SDC-DOS alert
+*******************************************************************************
+DRAW_SETUP:
+            LDX     #$0400
+            LDA     #$60
+DSU_CLR:    STA     ,X+
+            CMPX    #$0600
+            BNE     DSU_CLR
+
+            LDX     #STR_SETUP_T
+            LDU     #$0400
+            LBSR    PSTR_D
+            LDX     #STR_SETUP_H
+            LDU     #$0440
+            LBSR    PSTR_D
+            LDX     #STR_SETUP_1
+            LDU     #$0480
+            LBSR    PSTR_N
+            LDX     #STR_SETUP_2
+            LDU     #$04C0
+            LBSR    PSTR_N
+            LDX     #STR_SETUP_3
+            LDU     #$04E0
+            LBSR    PSTR_N
+            LDX     #STR_SETUP_4
+            LDU     #$0500
+            LBSR    PSTR_N
+            LDX     #STR_SETUP_5
+            LDU     #$0520
+            LBSR    PSTR_N
+            LDX     #STR_DIV_FULL
+            LDU     #$05C0
+            LBSR    PSTR_D
+            LDX     #STR_SETUP_6
+            LDU     #$05E0
+            LBSR    PSTR_T
+            RTS
+
+*******************************************************************************
+* DRAW_FLASH - Flash ROM bank management
+*******************************************************************************
+DRAW_FLASH:
+            LDX     #$0400
+            LDA     #$60
+DF_CLR:     STA     ,X+
+            CMPX    #$0600
+            BNE     DF_CLR
+
+            LDX     #STR_FLASH_T
+            LDU     #$0400
+            LBSR    PSTR_D
+            LDX     #STR_FLASH_H
+            LDU     #$0440
+            LBSR    PSTR_D
+            LDX     #STR_FLASH_S0
+            LDU     #$0460
+            LBSR    PSTR_N
+            LDA     STATUS_FLASH
+            BITA    #1
+            BEQ     DF_S1OK
+            LDX     #STR_FLASH_S1M
+            BRA     DF_S1P
+DF_S1OK:    LDX     #STR_FLASH_S1I
+DF_S1P:     LDU     #$0480
+            LBSR    PSTR_N
+            LDX     #STR_FLASH_S2
+            LDU     #$04A0
+            LBSR    PSTR_N
+            LDX     #STR_FLASH_S3
+            LDU     #$04C0
+            LBSR    PSTR_N
+            LDX     #STR_FLASH_S
+            LDU     #$0500
+            LBSR    PSTR_T
+            LDX     #STR_FLASH_C
+            LDU     #$0520
+            LBSR    PSTR_T
+            LDX     #STR_FLASH_R
+            LDU     #$0540
+            LBSR    PSTR_T
+            LDX     #STR_FLASH_I
+            LDU     #$0560
+            LBSR    PSTR_T
+            LDX     #STR_DIV_FULL
+            LDU     #$05A0
+            LBSR    PSTR_D
+            LDX     #STR_RTN_X
+            LDU     #$05E0
+            LBSR    PSTR_T
+            RTS
+
+*******************************************************************************
+* DRAW_INFO - Credits and hardware info
+*******************************************************************************
+DRAW_INFO:
+            LDX     #$0400
+            LDA     #$60
+DI_CLR:     STA     ,X+
+            CMPX    #$0600
+            BNE     DI_CLR
+
+            LDX     #STR_INFO_T
+            LDU     #$0400
+            LBSR    PSTR_D
+            LDX     #STR_INFO_HDR
+            LDU     #$0420
+            LBSR    PSTR_D
+
+            * Row 2: blank separator (black)
+            LDU     #$0440
+            LDB     #32
+            LDA     #$20
+DI_BLANK:   STA     ,U+
+            DECB
+            BNE     DI_BLANK
+
+            LDX     #STR_INFO_BOARD
+            LDU     #$0460
+            LBSR    PSTR_N
+            LDX     #STR_INFO_2
+            LDU     #$0480
+            LBSR    PSTR_N
+            LDX     #STR_INFO_3
+            LDU     #$04A0
+            LBSR    PSTR_N
+            LDX     #STR_INFO_4
+            LDU     #$04C0
+            LBSR    PSTR_N
+            LDX     #STR_DIV_FULL
+            LDU     #$04E0
+            LBSR    PSTR_D
+            LDX     #STR_INFO_5
+            LDU     #$0500
+            LBSR    PSTR_N
+            LDX     #STR_INFO_6
+            LDU     #$0520
+            LBSR    PSTR_N
+            LDX     #STR_DIV_FULL
+            LDU     #$0540
+            LBSR    PSTR_D
+            LDX     #STR_INFO_MARK1
+            LDU     #$0560
+            LBSR    PSTR_N
+            LDX     #STR_INFO_MARK2
+            LDU     #$0580
+            LBSR    PSTR_N
+            LDX     #STR_INFO_URL
+            LDU     #$05A0
+            LBSR    PSTR_N
+            LDX     #STR_DIV_FULL
+            LDU     #$05C0
+            LBSR    PSTR_D
+            LDX     #STR_RTN_X
+            LDU     #$05E0
+            LBSR    PSTR_T
+            RTS
+
+*******************************************************************************
+* DRAW_ROM - Alt ROM loader placeholder
 *******************************************************************************
 DRAW_ROM:
             LDX     #$0400
@@ -642,36 +910,9 @@ DR_CLR:     STA     ,X+
             LDX     #STR_ROM_T
             LDU     #$0400
             LBSR    PSTR_D
-            LDX     #STR_ROM_H
-            LDU     #$0440
-            LBSR    PSTR_D
-            LDX     #STR_ROM_1
+            LDX     #STR_ROM_MSG
             LDU     #$0480
-            LBSR    PSTR_T
-            LDX     #STR_ROM_2
-            LDU     #$04A0
-            LBSR    PSTR_T
-            LDX     #STR_ROM_3
-            LDU     #$04C0
-            LBSR    PSTR_T
-            LDX     #STR_ROM_4
-            LDU     #$04E0
-            LBSR    PSTR_T
-            LDX     #STR_ROM_5
-            LDU     #$0500
-            LBSR    PSTR_T
-            LDX     #STR_DIV_OPT
-            LDU     #$0540
-            LBSR    PSTR_D
-            LDX     #STR_ROM_L
-            LDU     #$0560
-            LBSR    PSTR_T
-            LDX     #STR_ROM_E
-            LDU     #$0580
-            LBSR    PSTR_T
-            LDX     #STR_DIV_OPT
-            LDU     #$05A0
-            LBSR    PSTR_D
+            LBSR    PSTR_N
             LDX     #STR_RTN_X
             LDU     #$05E0
             LBSR    PSTR_T
@@ -829,12 +1070,9 @@ DTZ1_CLR:   STA     ,X+
             LDU     #$0440
             LBSR    PSTR_D
             
-            LDX     #STATUS_TZ
-            LDA     ,X
-            BNE     DTZ1_VAL
-            LDX     #STR_UNK
-DTZ1_VAL:   LDU     #$0480
-            LBSR    PSTR_N_MAX
+            LDX     #STR_TZ_SEL
+            LDU     #$0480
+            LBSR    PSTR_N
 
             LDX     #STR_TZ_1
             LDU     #$04A0
@@ -854,12 +1092,16 @@ DTZ1_VAL:   LDU     #$0480
             LDX     #STR_TZ_6
             LDU     #$0540
             LBSR    PSTR_T
-            LDX     #STR_DIV_OPT
             LDU     #$0560
-            LBSR    PSTR_D
-            LDX     #STR_PROMPT
+            LBSR    CLR_ROW_G
+            LDX     #STR_DIV_OPT
             LDU     #$0580
-            LBSR    PSTR_N_MAX
+            LBSR    PSTR_D
+            LDU     #$05A0
+            LBSR    CLR_ROW_G
+            LDX     #STR_TZ_PROMPT
+            LDU     #$05C0
+            LBSR    PSTR_N
             LDX     #STR_RTN_N
             LDU     #$05E0
             LBSR    PSTR_T
@@ -882,12 +1124,9 @@ DTZ2_CLR:   STA     ,X+
             LDU     #$0440
             LBSR    PSTR_D
             
-            LDX     #STATUS_TZ
-            LDA     ,X
-            BNE     DTZ2_VAL
-            LDX     #STR_UNK
-DTZ2_VAL:   LDU     #$0480
-            LBSR    PSTR_N_MAX
+            LDX     #STR_TZ_SEL
+            LDU     #$0480
+            LBSR    PSTR_N
 
             LDX     #STR_TZ_7
             LDU     #$04A0
@@ -907,12 +1146,16 @@ DTZ2_VAL:   LDU     #$0480
             LDX     #STR_TZ_12
             LDU     #$0540
             LBSR    PSTR_T
-            LDX     #STR_DIV_OPT
             LDU     #$0560
-            LBSR    PSTR_D
-            LDX     #STR_PROMPT
+            LBSR    CLR_ROW_G
+            LDX     #STR_DIV_OPT
             LDU     #$0580
-            LBSR    PSTR_N_MAX
+            LBSR    PSTR_D
+            LDU     #$05A0
+            LBSR    CLR_ROW_G
+            LDX     #STR_TZ_PROMPT
+            LDU     #$05C0
+            LBSR    PSTR_N
             LDX     #STR_RTN_NP
             LDU     #$05E0
             LBSR    PSTR_T
@@ -935,12 +1178,9 @@ DTZ3_CLR:   STA     ,X+
             LDU     #$0440
             LBSR    PSTR_D
             
-            LDX     #STATUS_TZ
-            LDA     ,X
-            BNE     DTZ3_VAL
-            LDX     #STR_UNK
-DTZ3_VAL:   LDU     #$0480
-            LBSR    PSTR_N_MAX
+            LDX     #STR_TZ_SEL
+            LDU     #$0480
+            LBSR    PSTR_N
 
             LDX     #STR_TZ_13
             LDU     #$04A0
@@ -960,12 +1200,16 @@ DTZ3_VAL:   LDU     #$0480
             LDX     #STR_TZ_18
             LDU     #$0540
             LBSR    PSTR_T
-            LDX     #STR_DIV_OPT
             LDU     #$0560
-            LBSR    PSTR_D
-            LDX     #STR_PROMPT
+            LBSR    CLR_ROW_G
+            LDX     #STR_DIV_OPT
             LDU     #$0580
-            LBSR    PSTR_N_MAX
+            LBSR    PSTR_D
+            LDU     #$05A0
+            LBSR    CLR_ROW_G
+            LDX     #STR_TZ_PROMPT
+            LDU     #$05C0
+            LBSR    PSTR_N
             LDX     #STR_RTN_P
             LDU     #$05E0
             LBSR    PSTR_T
@@ -999,10 +1243,10 @@ D1S_LOOP:   LEAX    -1,X
             RTS
 
 *******************************************************************************
-* DRAW_STATUS - Row 3 dynamic (normal text)
+* DRAW_STATUS - Row 4 dynamic (normal text)
 *******************************************************************************
 DRAW_STATUS:
-            LDU     #$0460
+            LDU     #$0480
             LDX     #STR_STAT_PRE
             LBSR    PSTR_N
             LDA     VAR_AUDIO
@@ -1028,7 +1272,11 @@ DS_D1:      CMPA    #1
             BNE     DS_D2
             LDX     #STR_STAT_FUJ
             BRA     DS_DP
-DS_D2:      LDX     #STR_STAT_OFF
+DS_D2:      CMPA    #2
+            BNE     DS_D3
+            LDX     #STR_STAT_OFF
+            BRA     DS_DP
+DS_D3:      LDX     #STR_STAT_INT
 DS_DP:      LBSR    PSTR_N
 
             LDX     #STR_STAT_V
@@ -1062,6 +1310,26 @@ DS_C2:      CMPA    #2
             BRA     DS_CP
 DS_C3:      LDX     #STR_STAT_OFF
 DS_CP:      LBSR    PSTR_N
+            RTS
+
+*******************************************************************************
+* CLR_ROW - fill 32 columns at U with black spaces
+*******************************************************************************
+CLR_ROW:    LDB     #32
+            LDA     #$20
+CR_LOOP:    STA     ,U+
+            DECB
+            BNE     CR_LOOP
+            RTS
+
+*******************************************************************************
+* CLR_ROW_G - fill 32 columns at U with green spaces ($60)
+*******************************************************************************
+CLR_ROW_G:  LDB     #32
+            LDA     #$60
+CRG_LOOP:   STA     ,U+
+            DECB
+            BNE     CRG_LOOP
             RTS
 
 *******************************************************************************
@@ -1122,13 +1390,16 @@ PNNM_DONE:  RTS
 * STRINGS - $01 = toggle marker for PSTR_T
 *******************************************************************************
 
-STR_TITLE   FCC     "    COPICO X-BIOS MASTER HAT   "
+STR_TITLE   FCC     "    COPICO 10 IN 1 MULTI HAT     "
             FCB     0
 
-STR_CUR_HDR FCC     "-------CURRENT SETTINGS--------"
+STR_SUBTITLE FCC    "      CREATED BY PORTACOCO      "
             FCB     0
 
-STR_TOG_HDR FCC     "----PRESS KEY TO TOGGLE--------"
+STR_CUR_HDR FCC     "--------CURRENT SETTINGS--------"
+            FCB     0
+
+STR_TOG_HDR FCC     "------PRESS KEY TO TOGGLE-------"
             FCB     0
 
 STR_DIV_FULL FCC    "--------------------------------"
@@ -1151,7 +1422,7 @@ STR_WIFI_NA FCC     "PRESS "
             FCB     0
 
 * Status row fragments (normal)
-STR_STAT_PRE FCC    "  A:"
+STR_STAT_PRE FCC    "   A:"
             FCB     0
 STR_STAT_SPK FCC    "SSC"
             FCB     0
@@ -1180,6 +1451,8 @@ STR_STAT_RS FCC     "232"
 STR_STAT_FUJC FCC   "FUJ"
             FCB     0
 STR_STAT_OFF FCC    "OFF"
+            FCB     0
+STR_STAT_INT FCC    "INT"
             FCB     0
 
 * Toggle row labels: $01 wraps the inverse hotkey letter
@@ -1237,23 +1510,29 @@ STR_VAL_SDC     FCC "COCOSDC (SD)      "
                 FCB 0
 STR_VAL_FUJINET_D FCC "FUJINET           "
                   FCB 0
+STR_VAL_INTERNAL FCC "INTERNAL ROM PASS "
+                   FCB 0
 STR_VAL_RTCOFF  FCC "OFF (NO WIFI)     "
                 FCB 0
 STR_VAL_RTCON   FCC "ON  (SYNCED)      "
                 FCB 0
 
-* Footer rows with toggle markers
-STR_FOOT1   FCC     "  PRESS "
+* Footer rows with toggle markers (UPPERCASE inside toggles — CoCo 6-bit)
+STR_FOOT1   FCC     " PRESS "
             FCB     $01
             FCC     "[ENTER]"
             FCB     $01
-            FCC     " TO START COCO "
+            FCC     " TO RESTART COCO "
             FCB     0
-STR_FOOT2   FCC     "    OR PRESS "
+STR_FOOT2   FCC     "     "
             FCB     $01
             FCC     "[O]"
             FCB     $01
-            FCC     " FOR OPTIONS   "
+            FCC     " OPTIONS OR "
+            FCB     $01
+            FCC     "[I]"
+            FCB     $01
+            FCC     " INFO"
             FCB     0
 
 * --- Options Menu Strings ---
@@ -1303,6 +1582,13 @@ STR_OPT_6   FCC     "   "
             FCC     "[6]"
             FCB     $01
             FCC     " TIME ZONE CONFIGURATION  "
+            FCB     0
+
+STR_OPT_7   FCC     "   "
+            FCB     $01
+            FCC     "[7]"
+            FCB     $01
+            FCC     " FLASH ROM MANAGEMENT     "
             FCB     0
 
 STR_DIV_OPT FCC     "------------------------------- "
@@ -1372,52 +1658,92 @@ STR_WIFI_J  FCC     "   "
             FCC     " JOIN SELECTED (PROMPT PW)"
             FCB     0
 
-* --- ROM Loader Strings ---
+* --- Setup Required alert ---
+STR_SETUP_T FCC     "  *** SETUP REQUIRED ***        "
+            FCB     0
+STR_SETUP_H FCC     "  -------- ACTION NEEDED ---------"
+            FCB     0
+STR_SETUP_1 FCC     "  SDC-DOS ROM IS NOT INSTALLED. "
+            FCB     0
+STR_SETUP_2 FCC     "  PLEASE PLACE COCOSDC.ROM IN   "
+            FCB     0
+STR_SETUP_3 FCC     "  ROOT OR /ROMS/ FOLDER ON SD  "
+            FCB     0
+STR_SETUP_4 FCC     "  CARD AND RESTART TO INSTALL   "
+            FCB     0
+STR_SETUP_5 FCC     "  SDC-DOS.                      "
+            FCB     0
+STR_SETUP_6 FCC     "   PRESS ANY KEY TO RESTART    "
+            FCB     0
+
+* --- Flash ROM Management ---
+STR_FLASH_T FCC     "  *** FLASH ROM MANAGEMENT ***  "
+            FCB     0
+STR_FLASH_H FCC     "  ----  FLASH BANK STATUS  ---- "
+            FCB     0
+STR_FLASH_S0 FCC    "  [SLOT 0] X-BIOS     : INSTALLED"
+            FCB     0
+STR_FLASH_S1I FCC   "  [SLOT 1] SDC-DOS    : INSTALLED"
+            FCB     0
+STR_FLASH_S1M FCC   "  [SLOT 1] SDC-DOS    : MISSING  "
+            FCB     0
+STR_FLASH_S2 FCC    "  [SLOT 2] FUJINET    : INSTALLED"
+            FCB     0
+STR_FLASH_S3 FCC    "  [SLOT 3] RS-232 PAK : INSTALLED"
+            FCB     0
+STR_FLASH_S FCC     "   "
+            FCB     $01
+            FCC     "[S]"
+            FCB     $01
+            FCC     " SCAN SD FOR ROMS         "
+            FCB     0
+STR_FLASH_C FCC     "   "
+            FCB     $01
+            FCC     "[C]"
+            FCB     $01
+            FCC     " CLEAR FLASH BANK         "
+            FCB     0
+STR_FLASH_R FCC     "   "
+            FCB     $01
+            FCC     "[R]"
+            FCB     $01
+            FCC     " RE-INSTALL DEFAULTS      "
+            FCB     0
+STR_FLASH_I FCC     "   "
+            FCB     $01
+            FCC     "[I]"
+            FCB     $01
+            FCC     " BOOT INTERNAL ROM (PASS) "
+            FCB     0
+
+* --- Info page (all uppercase — CoCo 6-bit charset, 32 cols centered) ---
+STR_INFO_T  FCC     "*** COPICO 10 IN 1 MULTI HAT ***"
+            FCB     0
+STR_INFO_HDR FCC    "   SOFTWARE & HARDWARE CREDITS  "
+            FCB     0
+STR_INFO_BOARD FCC  "   COPICO CENTIPEDE BOARD BY    "
+            FCB     0
+STR_INFO_2  FCC     "     HENRY STRICKLAND AND       "
+            FCB     0
+STR_INFO_3  FCC     "         THOMAS SHANKS          "
+            FCB     0
+STR_INFO_4  FCC     "  GITHUB.COM/STRICKYAK/COPICO   "
+            FCB     0
+STR_INFO_5  FCC     "  THIS HAT IS DESIGNED FOR THE  "
+            FCB     0
+STR_INFO_6  FCC     "    CENTIPEDE 32Z BOARD ONLY    "
+            FCB     0
+STR_INFO_MARK1 FCC  "   10 IN 1 HARDWARE AND ROM     "
+            FCB     0
+STR_INFO_MARK2 FCC  "     SOFTWARE BY MARK PACAN     "
+            FCB     0
+STR_INFO_URL FCC    "         WWW.PORTACOCO.COM      "
+            FCB     0
+
+* --- Alt ROM loader placeholder ---
 STR_ROM_T   FCC     "     *** ALT ROM LOADER ***     "
             FCB     0
-STR_ROM_H   FCC     " -----AVAILABLE ROMS ON SD------"
-            FCB     0
-STR_ROM_1   FCC     "   "
-            FCB     $01
-            FCC     "[1]"
-            FCB     $01
-            FCC     " DIAG_ROM.ROM             "
-            FCB     0
-STR_ROM_2   FCC     "   "
-            FCB     $01
-            FCC     "[2]"
-            FCB     $01
-            FCC     " NITROS9_L2.ROM           "
-            FCB     0
-STR_ROM_3   FCC     "   "
-            FCB     $01
-            FCC     "[3]"
-            FCB     $01
-            FCC     " CUSTOM_BASIC.ROM         "
-            FCB     0
-STR_ROM_4   FCC     "   "
-            FCB     $01
-            FCC     "[4]"
-            FCB     $01
-            FCC     " -- EMPTY --              "
-            FCB     0
-STR_ROM_5   FCC     "   "
-            FCB     $01
-            FCC     "[5]"
-            FCB     $01
-            FCC     " -- EMPTY --              "
-            FCB     0
-STR_ROM_L   FCC     "   "
-            FCB     $01
-            FCC     "[L]"
-            FCB     $01
-            FCC     " LOAD SELECTED ROM        "
-            FCB     0
-STR_ROM_E   FCC     "   "
-            FCB     $01
-            FCC     "[E]"
-            FCB     $01
-            FCC     " EJECT CUSTOM ROM         "
+STR_ROM_MSG FCC     "  USE OPTION [7] FLASH ROM MGMT "
             FCB     0
 
 * --- DIAGNOSTICS STRINGS ---
@@ -1500,6 +1826,8 @@ STR_TZ_T2   FCC     " *** TZ: EUROPE/WORLD  (2/3) ***"
 STR_TZ_T3   FCC     " *** TZ: ASIA/OCEANIA  (3/3) ***"
             FCB     0
 STR_TZ_H    FCC     "  ------CURRENT SELECTION-------"
+            FCB     0
+STR_TZ_SEL  FCC     "       SELECT TIME ZONE:        "
             FCB     0
 STR_TZ_1    FCC     "   "
             FCB     $01
@@ -1616,7 +1944,7 @@ STR_RTN_X   FCC     "    PRESS "
             FCB     $01
             FCC     " TO RETURN         "
             FCB     0
-STR_RTN_N   FCC     "  "
+STR_RTN_N   FCC     "       "
             FCB     $01
             FCC     "[N]"
             FCB     $01
@@ -1624,9 +1952,9 @@ STR_RTN_N   FCC     "  "
             FCB     $01
             FCC     "[X]"
             FCB     $01
-            FCC     " RETURN           "
+            FCC     " RETURN        "
             FCB     0
-STR_RTN_P   FCC     "  "
+STR_RTN_P   FCC     "       "
             FCB     $01
             FCC     "[P]"
             FCB     $01
@@ -1634,9 +1962,9 @@ STR_RTN_P   FCC     "  "
             FCB     $01
             FCC     "[X]"
             FCB     $01
-            FCC     " RETURN           "
+            FCC     " RETURN        "
             FCB     0
-STR_RTN_NP  FCC     "  "
+STR_RTN_NP  FCC     "    "
             FCB     $01
             FCC     "[P]"
             FCB     $01
@@ -1648,9 +1976,9 @@ STR_RTN_NP  FCC     "  "
             FCB     $01
             FCC     "[X]"
             FCB     $01
-            FCC     " RET"
+            FCC     " RETURN    "
             FCB     0
-STR_PROMPT  FCC     "   SELECT 1-6 OR N/P/X TO EXIT  "
+STR_TZ_PROMPT FCC   "         SELECT 1-6 OR         "
             FCB     0
 STR_SAVING  FCC     "  *** SAVING CONFIGURATION ***  "
             FCB     0

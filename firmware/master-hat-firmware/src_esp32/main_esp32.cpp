@@ -41,6 +41,10 @@ volatile uint16_t modem_tx_tail = 0;
 
 uint32_t last_sys_info_time = 0;
 char current_tz_name[32] = "UTC (GMT)";
+
+// ROM fetch buffer for CoPico X-BIOS flash utility (max 16KB file)
+static uint8_t rom_fetch_buf[16384];
+static uint16_t rom_fetch_size = 0;
 const char* tz_strings[] = {
     // North America
     "NST3:30NDT,M3.2.0,M11.1.0",
@@ -200,6 +204,50 @@ void process_spi_transaction() {
                             Serial.printf("ESP32: Failed to mount '%s'\n", filename);
                         }
                     }
+                }
+                else if (rx_packet.command == CMD_ROM_FETCH) {
+                    char filename[250];
+                    memcpy(filename, rx_packet.payload, rx_packet.length);
+                    filename[rx_packet.length < 249 ? rx_packet.length : 249] = '\0';
+
+                    rom_fetch_size = 0;
+                    if (sd.exists(filename)) {
+                        File rom_file = sd.open(filename, O_RDONLY);
+                        if (rom_file) {
+                            rom_fetch_size = (uint16_t)rom_file.size();
+                            if (rom_fetch_size > sizeof(rom_fetch_buf)) {
+                                rom_fetch_size = sizeof(rom_fetch_buf);
+                            }
+                            int bytes_read = rom_file.read(rom_fetch_buf, rom_fetch_size);
+                            rom_file.close();
+                            if (bytes_read < 0) rom_fetch_size = 0;
+                            else rom_fetch_size = (uint16_t)bytes_read;
+                        }
+                    }
+
+                    tx_packet.status = STATUS_ROM_ACK;
+                    tx_packet.payload[0] = rom_fetch_size ? 0x00 : 0x80;
+                    tx_packet.payload[1] = rom_fetch_size & 0xFF;
+                    tx_packet.payload[2] = (rom_fetch_size >> 8) & 0xFF;
+                    tx_packet.payload[3] = 252;
+                    tx_packet.length = 4;
+                    Serial.printf("ESP32: ROM fetch '%s' -> %u bytes\n", filename, rom_fetch_size);
+                }
+                else if (rx_packet.command == CMD_ROM_READ_CHUNK) {
+                    uint16_t offset = (uint16_t)rx_packet.payload[0] |
+                                      ((uint16_t)rx_packet.payload[1] << 8);
+                    uint8_t chunk_len = 0;
+                    if (offset < rom_fetch_size) {
+                        chunk_len = rom_fetch_size - offset;
+                        if (chunk_len > 252) chunk_len = 252;
+                        tx_packet.payload[0] = chunk_len;
+                        memcpy(&tx_packet.payload[1], rom_fetch_buf + offset, chunk_len);
+                    } else {
+                        tx_packet.payload[0] = 0;
+                    }
+                    tx_packet.status = STATUS_ROM_CHUNK;
+                    tx_packet.length = 1 + chunk_len;
+                }
                 else if (rx_packet.command == CMD_SDC_SWAP) {
                     // TODO: Implement actual disk cycling logic
                     // For now, we will just send an ACK
@@ -235,7 +283,10 @@ void process_spi_transaction() {
         // --- PREPARE THE NEXT TX PACKET ---
         uint32_t now = millis();
         // Send SYS_INFO every 5 seconds if not doing SDC commands
-        if (now - last_sys_info_time >= 5000 && rx_packet.command != CMD_SDC_READ && rx_packet.command != CMD_SDC_WRITE && rx_packet.command != CMD_SDC_MOUNT && rx_packet.command != CMD_SDC_SWAP) {
+        if (now - last_sys_info_time >= 5000 &&
+            rx_packet.command != CMD_SDC_READ && rx_packet.command != CMD_SDC_WRITE &&
+            rx_packet.command != CMD_SDC_MOUNT && rx_packet.command != CMD_SDC_SWAP &&
+            rx_packet.command != CMD_ROM_FETCH && rx_packet.command != CMD_ROM_READ_CHUNK) {
             last_sys_info_time = now;
             memset(&tx_packet, 0, sizeof(tx_packet));
             tx_packet.sync = SPI_SYNC_BYTE;
@@ -258,7 +309,9 @@ void process_spi_transaction() {
             time(&now_time);
             sys_info->ntp_timestamp = (uint32_t)now_time;
             
-        } else if (rx_packet.command != CMD_SDC_READ && rx_packet.command != CMD_SDC_WRITE && rx_packet.command != CMD_SDC_MOUNT && rx_packet.command != CMD_SDC_SWAP) {
+        } else if (rx_packet.command != CMD_SDC_READ && rx_packet.command != CMD_SDC_WRITE &&
+                   rx_packet.command != CMD_SDC_MOUNT && rx_packet.command != CMD_SDC_SWAP &&
+                   rx_packet.command != CMD_ROM_FETCH && rx_packet.command != CMD_ROM_READ_CHUNK) {
             memset(&tx_packet, 0, sizeof(tx_packet));
             tx_packet.sync = SPI_SYNC_BYTE;
             tx_packet.status = STATUS_IDLE;

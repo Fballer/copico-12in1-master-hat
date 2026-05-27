@@ -74,6 +74,8 @@ bool Esp32Bridge::transaction(SpiMasterPacket* tx_packet, SpiSlavePacket* rx_pac
         case CMD_SDC_READ:
         case CMD_SDC_WRITE:
         case CMD_SDC_MOUNT:
+        case CMD_ROM_FETCH:
+        case CMD_ROM_READ_CHUNK:
             timeout_ms = SPI_TIMEOUT_SD_MS;
             break;
         default:
@@ -242,4 +244,45 @@ bool Esp32Bridge::sdc_swap() {
         }
     }
     return false;
+}
+
+bool Esp32Bridge::rom_fetch_file(const char* path, uint8_t* buffer, size_t max_len, size_t* out_len) {
+    if (!path || !buffer || !out_len) return false;
+
+    SpiMasterPacket tx;
+    SpiSlavePacket rx;
+    memset(&tx, 0, sizeof(tx));
+
+    tx.command = CMD_ROM_FETCH;
+    size_t path_len = strlen(path);
+    if (path_len >= SPI_PAYLOAD_SIZE) path_len = SPI_PAYLOAD_SIZE - 1;
+    memcpy(tx.payload, path, path_len);
+    tx.payload[path_len] = '\0';
+    tx.length = (uint8_t)(path_len + 1);
+
+    if (!transaction(&tx, &rx)) return false;
+    if (rx.status != STATUS_ROM_ACK || rx.payload[0] != 0) return false;
+
+    uint16_t total = (uint16_t)rx.payload[1] | ((uint16_t)rx.payload[2] << 8);
+    if (total == 0 || total > max_len) return false;
+
+    size_t offset = 0;
+    while (offset < total) {
+        memset(&tx, 0, sizeof(tx));
+        tx.command = CMD_ROM_READ_CHUNK;
+        tx.payload[0] = (uint8_t)(offset & 0xFF);
+        tx.payload[1] = (uint8_t)((offset >> 8) & 0xFF);
+        tx.length = 2;
+
+        if (!transaction(&tx, &rx)) return false;
+        if (rx.status != STATUS_ROM_CHUNK) return false;
+
+        uint8_t chunk_len = rx.payload[0];
+        if (chunk_len == 0 || offset + chunk_len > total) return false;
+        memcpy(buffer + offset, &rx.payload[1], chunk_len);
+        offset += chunk_len;
+    }
+
+    *out_len = total;
+    return true;
 }

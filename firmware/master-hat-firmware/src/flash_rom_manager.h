@@ -69,9 +69,19 @@ class FlashRomManager {
 public:
     FlashRomManager();
 
-    // Call on every boot to ensure Chameleon, FujiNet, RS-232, and Disk BASIC
-    // are in their slots. Does NOT touch SDC-DOS (Slot 1) — that is SD-card only.
-    void init_factory_defaults();
+    // Call on every boot to ensure factory ROMs are in their slots.
+    // Does NOT touch SDC-DOS (Slot 1) unless force_reinstall is true.
+    void init_factory_defaults(bool force_reinstall = false);
+
+    // Erase slot header (marks empty). Does not erase full 16KB on RP2350
+    // (flash erase is done on next install_rom).
+    void erase_slot(uint8_t slot);
+
+    // Clear user-supplied ROMs (SDC-DOS + empty CoCoSDC bank slots).
+    void clear_user_slots();
+
+    // Try to load /ROMS/COCOSDC.ROM from SD via ESP32 into Slot 1.
+    bool install_cocosdc_from_sd();
 
     // Install a ROM into a slot from a data buffer.
     // Erases the slot first, then writes header + data.

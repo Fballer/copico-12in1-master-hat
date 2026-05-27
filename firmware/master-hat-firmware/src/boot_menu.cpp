@@ -43,6 +43,10 @@ uint8_t BootMenu::read_rom(uint16_t address) {
             return flash_rom.status_flags;
         }
 
+        if (address == 0xD881) {
+            return flash_result;
+        }
+
         // Return from auto-generated ROM array
         return copico_xbios_bin[address - 0xC000];
     }
@@ -56,21 +60,71 @@ void BootMenu::set_config(uint16_t address, uint8_t data) {
     else if (address == 0xFF73) reg_comm = data;
 }
 
+void BootMenu::set_flash_command(uint8_t cmd) {
+    if ((cmd >= FLASH_CMD_SCAN_SD && cmd <= FLASH_CMD_REINSTALL) ||
+        cmd == FLASH_CMD_INTERNAL_ROM) {
+        pending_flash_cmd = cmd;
+        flash_result = FLASH_RESULT_BUSY;
+    }
+}
+
+void BootMenu::run_flash_command(uint8_t cmd) {
+    bool ok = false;
+
+    switch (cmd) {
+        case FLASH_CMD_SCAN_SD:
+            ok = flash_rom.install_cocosdc_from_sd();
+            break;
+        case FLASH_CMD_CLEAR_BANK:
+            flash_rom.clear_user_slots();
+            ok = true;
+            break;
+        case FLASH_CMD_REINSTALL:
+            flash_rom.init_factory_defaults(true);
+            if (flash_rom.is_slot_empty(SLOT_COCOSDC)) {
+                flash_rom.status_flags |= FLASH_STATUS_SDC_MISSING;
+            }
+            ok = true;
+            break;
+        case FLASH_CMD_INTERNAL_ROM:
+            reg_disk = 3;
+            pending_mode_switch = MODE_INTERNAL_ROM;
+            ok = true;
+            break;
+        default:
+            break;
+    }
+
+    flash_result = ok ? FLASH_RESULT_OK : FLASH_RESULT_ERROR;
+    pending_flash_cmd = 0;
+}
+
+bool BootMenu::consume_pending_mode_switch(EmulatorMode* out_mode) {
+    if (pending_mode_switch == MODE_BOOT_MENU || !out_mode) {
+        return false;
+    }
+    *out_mode = pending_mode_switch;
+    pending_mode_switch = MODE_BOOT_MENU;
+    return true;
+}
+
+void BootMenu::service_flash_command() {
+    if (pending_flash_cmd != 0 && flash_result == FLASH_RESULT_BUSY) {
+        run_flash_command(pending_flash_cmd);
+    }
+}
+
 EmulatorMode BootMenu::calculate_mode() {
-    // If Audio is Orch-90 or Speech/Sound, that takes over the system
     if (reg_audio == 1) return MODE_ORCH90;
     if (reg_audio == 2) return MODE_SPEECH_SOUND;
-
-    // Video has next priority
     if (reg_video == 1) return MODE_WORDPAK2;
 
-    // Disk/Comm have next priority
-    if (reg_disk == 1) return MODE_COCOSDC;
-    if (reg_disk == 2 || reg_comm == 2) return MODE_FUJINET; // FujiNet takes both
+    if (reg_disk == 0) return MODE_COCOSDC;
+    if (reg_disk == 1 || reg_comm == 2) return MODE_FUJINET;
+    if (reg_disk == 3) return MODE_INTERNAL_ROM;
+
     if (reg_comm == 1) return MODE_RS232_PAK_LEGACY;
     if (reg_comm == 3) return MODE_WIMODEM;
 
-    // Default: if nothing is configured, show the Boot Menu
-    // so the user is never left at a blank screen.
     return MODE_BOOT_MENU;
 }

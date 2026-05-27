@@ -17,6 +17,8 @@
 #define CMD_SDC_MOUNT 0x12  // Payload: [0]=Drive, [1..n]=Null-terminated filename
 #define CMD_SDC_SWAP  0x13  // Payload: Empty. Tells ESP32 to mount next disk.
 #define CMD_SET_TIMEZONE 0x21 // Payload: [0]=Timezone Index
+#define CMD_ROM_FETCH      0x14 // Payload: null-terminated path on SD
+#define CMD_ROM_READ_CHUNK 0x15 // Payload: [0-1]=byte offset (little-endian)
 
 // Slave (ESP32) to Master (RP2350) Status
 #define STATUS_IDLE 0x01
@@ -25,6 +27,8 @@
 #define STATUS_SDC_ACK 0x11    // Payload: [0]=Error Code (0=Success)
 #define STATUS_SDC_BUSY 0x12   // Payload: Empty. ESP32 is reading/writing.
 #define STATUS_SYS_INFO 0x20   // Payload: SpiSysInfoPayload
+#define STATUS_ROM_ACK    0x22 // Payload: [0]=err (0=ok), [1-2]=size LE, [3]=max chunk
+#define STATUS_ROM_CHUNK  0x23 // Payload: [0]=len, [1..]=data
 
 // Packet structure (ensure 1-byte alignment)
 #pragma pack(push, 1)

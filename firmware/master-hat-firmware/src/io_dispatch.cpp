@@ -162,6 +162,10 @@ void rebuild_io_tables(EmulatorMode mode) {
             io_write_table[0x7B] = write_v9958;          // $FF7B write
             break;
 
+        case MODE_INTERNAL_ROM:
+            // rom_read_handler stays null — hat tri-states, CoCo uses internal ROMs
+            break;
+
         case MODE_COCOSDC:
             rom_read_handler = read_sdc_rom;
             io_read_table[0x40]  = read_cocosdc_reg;    // $FF40 read

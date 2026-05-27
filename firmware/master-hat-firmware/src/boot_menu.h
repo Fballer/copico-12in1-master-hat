@@ -4,6 +4,18 @@
 #include <Arduino.h>
 #include "emulator_mode.h"
 
+// Flash utility commands (written by CoPico X-BIOS to $FF76)
+#define FLASH_CMD_SCAN_SD     1
+#define FLASH_CMD_CLEAR_BANK  2
+#define FLASH_CMD_REINSTALL   3
+#define FLASH_CMD_INTERNAL_ROM 9
+
+// Result byte at $D881 (read by BIOS while polling)
+#define FLASH_RESULT_IDLE     0
+#define FLASH_RESULT_BUSY     1
+#define FLASH_RESULT_OK       2
+#define FLASH_RESULT_ERROR    3
+
 class BootMenu {
 public:
     BootMenu();
@@ -11,9 +23,16 @@ public:
     uint8_t read_rom(uint16_t address);
     void update_sys_info(const char* wifi, const char* fw, const char* sd, const char* tz);
     void set_config(uint16_t address, uint8_t data);
+    void set_flash_command(uint8_t cmd);
+    void service_flash_command();
     EmulatorMode calculate_mode();
+    bool consume_pending_mode_switch(EmulatorMode* out_mode);
+
+    uint8_t flash_result = FLASH_RESULT_IDLE;
 
 private:
+    void run_flash_command(uint8_t cmd);
+
     char wifi_status[32];
     char fw_version[32];
     char sd_status[32];
@@ -23,6 +42,9 @@ private:
     uint8_t reg_comm = 0;
     uint8_t reg_audio = 0;
     uint8_t reg_video = 0;
+
+    uint8_t pending_flash_cmd = 0;
+    EmulatorMode pending_mode_switch = MODE_BOOT_MENU;
 };
 
 #endif // BOOT_MENU_H

@@ -21,6 +21,9 @@ public:
     bool sdc_mount(uint8_t drive_id, const char* filename);
     bool sdc_swap();
 
+    // Read a ROM file from the ESP32 SD card into buffer (max 16KB).
+    bool rom_fetch_file(const char* path, uint8_t* buffer, size_t max_len, size_t* out_len);
+
 private:
     void send_packet(SpiMasterPacket* packet);
     bool receive_packet(SpiSlavePacket* packet);
