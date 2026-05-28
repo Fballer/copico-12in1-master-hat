@@ -1,5 +1,6 @@
 #include "cocosdc.h"
 #include "esp32_bridge.h"
+#include "flash_rom_manager.h"
 
 // Hardware Pin Definitions (From Phase 10 Refactor)
 #define SDC_LED 17
@@ -20,11 +21,12 @@ void Cocosdc::init() {
     // Initialize the SPI Bridge
     esp32.init();
     
-    // Load ROM into shadowed memory
-    // Note: In Phase 11, the ESP32 handles SD cards. 
-    // We will assume the BootMenu ROM is pre-loaded or we can request it via a special command.
-    // For now, we will zero the ROM buffer. (Future feature: fetch ROM over SPI)
-    memset(rom_buffer, 0, sizeof(rom_buffer));
+    if (!flash_rom.load_rom_to_buffer(SLOT_COCOSDC, rom_buffer, nullptr, nullptr)) {
+        Serial.println("[CoCoSDC] SDC-DOS not in flash — ROM shadow empty");
+        memset(rom_buffer, 0xFF, sizeof(rom_buffer));
+    } else {
+        Serial.println("[CoCoSDC] SDC-DOS loaded into ROM shadow");
+    }
     
     // We will ask the ESP32 to mount the default startup disks
     // This could also be a command we send, but we'll let the ESP32 handle default mounting internally on boot.

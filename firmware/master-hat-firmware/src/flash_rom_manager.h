@@ -57,7 +57,7 @@ struct RomSlotHeader {
     uint8_t  version;       // ROM version (for update checking)
     uint8_t  flags;         // Bit 0: is_16k, Bit 1: needs_sd_install
     char     name[20];      // Human-readable name for Boot Menu display
-    uint8_t  _reserved[228]; // Pad to exactly 256 bytes
+    uint8_t  _reserved[224]; // Pad to exactly 256 bytes
 };
 static_assert(sizeof(RomSlotHeader) == 256, "RomSlotHeader must be exactly 256 bytes");
 

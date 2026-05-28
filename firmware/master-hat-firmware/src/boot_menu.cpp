@@ -2,6 +2,7 @@
 #include <string.h>
 #include "../bios/xbios_rom.h"
 #include "flash_rom_manager.h"
+#include "hat_config.h"
 
 BootMenu::BootMenu() {
     memset(wifi_status, 0, sizeof(wifi_status));
@@ -11,7 +12,6 @@ BootMenu::BootMenu() {
 }
 
 void BootMenu::init() {
-    // Any specific initialization for the Boot Menu mode (if needed)
 }
 
 void BootMenu::update_sys_info(const char* wifi, const char* fw, const char* sd, const char* tz) {
@@ -22,35 +22,39 @@ void BootMenu::update_sys_info(const char* wifi, const char* fw, const char* sd,
 }
 
 uint8_t BootMenu::read_rom(uint16_t address) {
+    uint16_t offset;
     if (address >= 0xC000 && address <= 0xDFFF) {
-        // Intercept Status Strings
-        if (address >= 0xD800 && address < 0xD820) {
-            return wifi_status[address - 0xD800];
-        }
-        if (address >= 0xD820 && address < 0xD840) {
-            return fw_version[address - 0xD820];
-        }
-        if (address >= 0xD840 && address < 0xD860) {
-            return sd_status[address - 0xD840];
-        }
-        if (address >= 0xD860 && address < 0xD880) {
-            return tz_status[address - 0xD860];
-        }
-
-        // Flash ROM status byte ($D880) — read by CoPico X-BIOS
-        // to trigger "Setup Required" messages for missing ROMs.
-        if (address == 0xD880) {
-            return flash_rom.status_flags;
-        }
-
-        if (address == 0xD881) {
-            return flash_result;
-        }
-
-        // Return from auto-generated ROM array
-        return copico_xbios_bin[address - 0xC000];
+        offset = address - 0xC000;
+    } else if (address >= 0xFFFE) {
+        // CoCo reset vectors alias the last two bytes of the 8K ROM image.
+        offset = 0x1FFE + (address - 0xFFFE);
+    } else {
+        return 0xFF;
     }
-    return 0xFF; // Default open bus
+
+    if (address >= 0xD800 && address < 0xD820) {
+        return wifi_status[address - 0xD800];
+    }
+    if (address >= 0xD820 && address < 0xD840) {
+        return fw_version[address - 0xD820];
+    }
+    if (address >= 0xD840 && address < 0xD860) {
+        return sd_status[address - 0xD840];
+    }
+    if (address >= 0xD860 && address < 0xD880) {
+        return tz_status[address - 0xD860];
+    }
+    if (address == 0xD880) {
+        return flash_rom.status_flags;
+    }
+    if (address == 0xD881) {
+        return flash_result;
+    }
+
+    if (offset >= copico_xbios_bin_len) {
+        return 0xFF;
+    }
+    return copico_xbios_bin[offset];
 }
 
 void BootMenu::set_config(uint16_t address, uint8_t data) {
@@ -58,6 +62,19 @@ void BootMenu::set_config(uint16_t address, uint8_t data) {
     else if (address == 0xFF71) reg_video = data;
     else if (address == 0xFF72) reg_disk = data;
     else if (address == 0xFF73) reg_comm = data;
+    else if (address == 0xFF74) reg_rtc = data;
+
+    HatConfig scratch;
+    scratch.audio = reg_audio;
+    scratch.video = reg_video;
+    scratch.disk = reg_disk;
+    scratch.comm = reg_comm;
+    scratch.rtc = reg_rtc;
+    hat_config_apply_constraints(scratch);
+    reg_audio = scratch.audio;
+    reg_video = scratch.video;
+    reg_disk = scratch.disk;
+    reg_comm = scratch.comm;
 }
 
 void BootMenu::set_flash_command(uint8_t cmd) {
@@ -87,8 +104,8 @@ void BootMenu::run_flash_command(uint8_t cmd) {
             ok = true;
             break;
         case FLASH_CMD_INTERNAL_ROM:
-            reg_disk = 3;
-            pending_mode_switch = MODE_INTERNAL_ROM;
+            reg_disk = XBIOS_DISK_INTERNAL;
+            pending_config_apply = true;
             ok = true;
             break;
         default:
@@ -99,12 +116,23 @@ void BootMenu::run_flash_command(uint8_t cmd) {
     pending_flash_cmd = 0;
 }
 
-bool BootMenu::consume_pending_mode_switch(EmulatorMode* out_mode) {
-    if (pending_mode_switch == MODE_BOOT_MENU || !out_mode) {
-        return false;
-    }
-    *out_mode = pending_mode_switch;
-    pending_mode_switch = MODE_BOOT_MENU;
+bool BootMenu::get_config(HatConfig* out) const {
+    if (!out) return false;
+    out->audio = reg_audio;
+    out->video = reg_video;
+    out->disk = reg_disk;
+    out->comm = reg_comm;
+    out->rtc = reg_rtc;
+    HatConfig adjusted = *out;
+    hat_config_apply_constraints(adjusted);
+    *out = adjusted;
+    return true;
+}
+
+bool BootMenu::consume_pending_config_apply(HatConfig* out) {
+    if (!pending_config_apply || !out) return false;
+    get_config(out);
+    pending_config_apply = false;
     return true;
 }
 
@@ -112,19 +140,4 @@ void BootMenu::service_flash_command() {
     if (pending_flash_cmd != 0 && flash_result == FLASH_RESULT_BUSY) {
         run_flash_command(pending_flash_cmd);
     }
-}
-
-EmulatorMode BootMenu::calculate_mode() {
-    if (reg_audio == 1) return MODE_ORCH90;
-    if (reg_audio == 2) return MODE_SPEECH_SOUND;
-    if (reg_video == 1) return MODE_WORDPAK2;
-
-    if (reg_disk == 0) return MODE_COCOSDC;
-    if (reg_disk == 1 || reg_comm == 2) return MODE_FUJINET;
-    if (reg_disk == 3) return MODE_INTERNAL_ROM;
-
-    if (reg_comm == 1) return MODE_RS232_PAK_LEGACY;
-    if (reg_comm == 3) return MODE_WIMODEM;
-
-    return MODE_BOOT_MENU;
 }

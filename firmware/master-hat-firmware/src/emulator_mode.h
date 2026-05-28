@@ -12,6 +12,7 @@ enum EmulatorMode {
     MODE_FUJINET,             // FujiNet BIOS (Slot 2)
     MODE_WIMODEM,             // WiModem (WiFi modem)
     MODE_INTERNAL_ROM,        // Pass-through: Hat tri-states, CoCo uses its own ROMs
+    MODE_HAT_ACTIVE,          // Layered hat config running (audio+disk+comm stack)
     MODE_MAX                  // Sentinel — must always be last
 };
 

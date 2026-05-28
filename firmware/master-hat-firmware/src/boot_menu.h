@@ -2,15 +2,13 @@
 #define BOOT_MENU_H
 
 #include <Arduino.h>
-#include "emulator_mode.h"
+#include "hat_config.h"
 
-// Flash utility commands (written by CoPico X-BIOS to $FF76)
 #define FLASH_CMD_SCAN_SD     1
 #define FLASH_CMD_CLEAR_BANK  2
 #define FLASH_CMD_REINSTALL   3
 #define FLASH_CMD_INTERNAL_ROM 9
 
-// Result byte at $D881 (read by BIOS while polling)
 #define FLASH_RESULT_IDLE     0
 #define FLASH_RESULT_BUSY     1
 #define FLASH_RESULT_OK       2
@@ -25,8 +23,8 @@ public:
     void set_config(uint16_t address, uint8_t data);
     void set_flash_command(uint8_t cmd);
     void service_flash_command();
-    EmulatorMode calculate_mode();
-    bool consume_pending_mode_switch(EmulatorMode* out_mode);
+    bool get_config(HatConfig* out) const;
+    bool consume_pending_config_apply(HatConfig* out);
 
     uint8_t flash_result = FLASH_RESULT_IDLE;
 
@@ -42,9 +40,10 @@ private:
     uint8_t reg_comm = 0;
     uint8_t reg_audio = 0;
     uint8_t reg_video = 0;
+    uint8_t reg_rtc = 0;
 
     uint8_t pending_flash_cmd = 0;
-    EmulatorMode pending_mode_switch = MODE_BOOT_MENU;
+    bool pending_config_apply = false;
 };
 
 #endif // BOOT_MENU_H

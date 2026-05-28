@@ -2,9 +2,14 @@
 #include <EEPROM.h>
 #include <I2S.h>
 #include "hardware/pio.h"
+#include "hardware/structs/sio.h"
+#include "hardware/sync.h"
+#include "pico/multicore.h"
+#include "pico/time.h"
+#include "pico/platform.h"
 #include "coco_bus.pio.h"
+#include "../bios/xbios_rom.h"
 
-// Emulators
 #include "pic7040.h"
 #include "acia6551.h"
 #include "v9958.h"
@@ -17,49 +22,32 @@
 #include "rtc.h"
 #include "io_dispatch.h"
 #include "flash_rom_manager.h"
+#include "hat_config.h"
 
-// ==========================================================
-// Hardware Pin Definitions — Verified against PCB Netlist
-// Centipede 32z Hat-Fuji-40C schematic, dated 2026-04-19
-// ==========================================================
+#define PIN_BTN_DUAL   19
+#define PIN_STATUS_LED 17
+#define CENTIPEDE_LED  25
 
-// J3 Header — System Control
-#define PIN_BTN_DUAL   19  // J3 Pin 17: SDC_Button_G19
-#define PIN_STATUS_LED 17  // J3 Pin 15: SDC_LED_G17
-// Note: J3 Pin 18 = RESET line (hardware Reset_Pad)
+#define I2S_BCK 10
+#define I2S_DIN 11
+#define I2S_LCK 12
 
-// J3 Header — I2S DAC (PCM5102A: Orch-90 / Speech+Sound)
-#define I2S_BCK 10  // J3 Pin 5:  Sound_BCK_G10  -> PCM5102A BCK
-#define I2S_DIN 11  // J3 Pin 7:  Sound_DIN_G11  -> PCM5102A DIN
-#define I2S_LCK 12  // J3 Pin 9:  Sound_LCK_G12  -> PCM5102A LCK
-
-// J3 Header — RS-232 (HW-044 MAX3232 Module)
-// TX=G13 and RX=G15 are handled by SerialPIO (see below)
-
-// PIO Configuration
 PIO pio = pio0;
 uint sm_addr, sm_data, sm_read;
 
-// Audio state for Orch-90
 uint8_t dac_left = 128;
 uint8_t dac_right = 128;
 
-// Initialize I2S instance for audio output
 I2S i2s(OUTPUT);
 
-// Mode Selection
-EmulatorMode current_mode = MODE_BOOT_MENU;
+volatile EmulatorMode current_mode = MODE_BOOT_MENU;
+HatConfig active_config;
 
-// Boot Menu instance
 BootMenu boot_menu;
-
-// RTC Emulation instance
 Rtc rtc;
 
-// RS-232 Hardware UART Pins (via SerialPIO to map to any GPIO)
-SerialPIO rs232_serial(13, 15, 256); // TX=G13, RX=G15, 256-byte FIFO
+SerialPIO rs232_serial(13, 15, 256);
 
-// Global emulator instances
 Pic7040 pic7040;
 Acia6551 acia(&rs232_serial);
 SpiStream spi_wimodem_stream;
@@ -68,65 +56,285 @@ V9958 v9958;
 VgaDriver vga_driver(&v9958);
 Cocosdc cocosdc;
 
-// Button Timer State
 uint32_t btn_press_start = 0;
 bool btn_is_pressed = false;
 bool btn_warning_active = false;
+static bool flash_defaults_pending = true;
+static bool hardware_init_done = false;
+static volatile bool coco_bus_ready = false;
+static volatile uint32_t rom_serve_count = 0;
+static uint8_t coco_ram[128 * 1024];
 
-// Function prototypes
+static bool usb_host_connected() {
+    // Avoid blocking Serial when no monitor is attached (CDC TX can stall).
+    return Serial && Serial.dtr();
+}
+
+static void boot_log(const char* msg) {
+    if (usb_host_connected()) {
+        Serial.println(msg);
+    }
+}
+
+static void stage_blink(uint8_t count) {
+    for (uint8_t i = 0; i < count; i++) {
+        digitalWrite(CENTIPEDE_LED, HIGH);
+        delay(60);
+        digitalWrite(CENTIPEDE_LED, LOW);
+        delay(60);
+    }
+    delay(200);
+}
+
 void update_orch90_audio();
-void switch_mode(EmulatorMode new_mode);
+void enter_boot_menu();
+void apply_hat_config(const HatConfig& cfg);
 
-// PIN_RW and PIN_E_CLOCK are on the CoCo bus headers (directly read by PIO/GPIO)
-#define PIN_RW      20  // Active LOW = write cycle
-#define PIN_E_CLOCK 21  // E-clock from the CoCo
+#define PIN_RW      20
+#define PIN_E_CLOCK 21
+#define PIN_Q       22
+#define PIN_CTS     8   // Centipede 32z CTS* (active LOW); shares J3 with hat VGA Green
+#define PIN_SCS     9   // Centipede 32z SCS* (active LOW); shares J3 with hat VGA Blue
+#define PIN_CART    27  // Centipede 32z CART* (open collector)
+#define PIN_SLENB   28  // Centipede 32z SLENB* (open collector)
+#define PIN_HALT    29  // Centipede 32z HALT* (open collector)
+#define PIN_NMI     30  // Centipede 32z NMI* (open collector)
 
-void setup() {
-    Serial.begin(115200);
-#ifdef PICO_DEFAULT_LED_PIN
-    pinMode(PICO_DEFAULT_LED_PIN, OUTPUT);
+// J6 schmitt (pins 2-3, 4-5): E/Q inverted at GPIO. Set -DCENTIPEDE_J6_DIRECT=1 for direct E/Q.
+#ifndef CENTIPEDE_J6_DIRECT
+#define CENTIPEDE_INVERT_EQ 1
+#else
+#define CENTIPEDE_INVERT_EQ 0
 #endif
 
-    pinMode(PIN_BTN_DUAL, INPUT_PULLUP);
+static bool pio_bus_armed = false;
+static bool pio_initialized = false;
+
+static inline void stall_while_e_high() {
+    while (gpio_get(PIN_E_CLOCK) == CENTIPEDE_INVERT_EQ) {
+        tight_loop_contents();
+    }
+}
+
+static inline void stall_while_e_low() {
+    while (gpio_get(PIN_E_CLOCK) != CENTIPEDE_INVERT_EQ) {
+        tight_loop_contents();
+    }
+}
+
+static inline void stall_while_q_low() {
+    while (gpio_get(PIN_Q) != CENTIPEDE_INVERT_EQ) {
+        tight_loop_contents();
+    }
+}
+
+static void disarm_pio_bus() {
+    if (!pio_bus_armed) return;
+    pio_sm_set_enabled(pio, sm_addr, false);
+    pio_sm_set_enabled(pio, sm_data, false);
+    pio_sm_set_enabled(pio, sm_read, false);
+    gpio_set_dir_in_masked(0xFFu);
+    pio_bus_armed = false;
+}
+
+static void rearm_pio_bus() {
+    if (pio_bus_armed) return;
+    pio_sm_set_enabled(pio, sm_read, true);
+    pio_enable_sm_mask_in_sync(pio, (1u << sm_addr) | (1u << sm_data));
+    pio_bus_armed = true;
+}
+
+static bool cart_rom_selected(uint16_t addr) {
+    return (addr >= 0xC000 && addr <= 0xDFFF) || addr >= 0xFFFE;
+}
+
+static bool in_boot_menu() {
+    return current_mode == MODE_BOOT_MENU;
+}
+
+static inline bool use_coco_ram(uint16_t abus) {
+    return abus < 0x8000u;
+}
+
+static inline void init_open_collector_pin(uint pin) {
+    gpio_init(pin);
+    gpio_set_dir(pin, GPIO_OUT);
+    gpio_put(pin, 0);
+    gpio_set_dir(pin, GPIO_IN);
+    gpio_set_pulls(pin, false, false);
+}
+
+static volatile sio_hw_t* const volatile_sio = (volatile sio_hw_t*)sio_hw;
+
+static inline bool vol_gpio_get(uint pin) {
+    if (pin < 32u) {
+        return (volatile_sio->gpio_in & (1u << pin)) != 0;
+    }
+    return (volatile_sio->gpio_hi_in & (1u << (pin - 32u))) != 0;
+}
+
+// Verbatim Bonobo centipede-watcher foreground body (Engine0 / SmallRam / DoCoco64k).
+static void __not_in_flash_func(bonobo_sync_one_cycle)() {
+    while (vol_gpio_get(PIN_E_CLOCK) == CENTIPEDE_INVERT_EQ) {
+        tight_loop_contents();
+    }
+
+    const uint32_t signals = volatile_sio->gpio_in;
+    const bool reading = (signals & (1u << PIN_RW)) != 0;
+    const uint16_t abus = (uint16_t)(volatile_sio->gpio_hi_in & 0xFFFFu);
+    uint8_t dbus = 0;
+
+    constexpr uint32_t NEG_CTS = (1u << PIN_CTS);
+    constexpr uint32_t NEG_SCS = (1u << PIN_SCS);
+    constexpr uint32_t NEG_SELECTS = NEG_CTS | NEG_SCS;
+
+    if ((signals & NEG_SELECTS) == NEG_SELECTS) {
+        if (reading) {
+            if (abus >= 0xFF00u) {
+                IoReadFunc handler = io_read_table[abus & 0xFFu];
+                if (handler) {
+                    dbus = handler(abus);
+                    gpio_set_dir_out_masked(0xFFu);
+                    gpio_put_masked(0xFFu, dbus);
+                }
+            } else if (use_coco_ram(abus)) {
+                dbus = coco_ram[abus];
+                gpio_set_dir(PIN_SLENB, GPIO_OUT);
+                busy_wait_at_least_cycles(12);
+                gpio_set_dir_out_masked(0xFFu);
+                gpio_put_masked(0xFFu, dbus);
+            }
+
+            while (vol_gpio_get(PIN_E_CLOCK) != CENTIPEDE_INVERT_EQ) {
+                tight_loop_contents();
+            }
+            gpio_set_dir_in_masked(0xFFu);
+            gpio_set_dir(PIN_SLENB, GPIO_IN);
+        } else {
+            while (vol_gpio_get(PIN_Q) != CENTIPEDE_INVERT_EQ) {
+                tight_loop_contents();
+            }
+            dbus = (uint8_t)(volatile_sio->gpio_in & 0xFFu);
+            coco_ram[abus] = dbus;
+            if (abus >= 0xFF00u) {
+                IoWriteFunc handler = io_write_table[abus & 0xFFu];
+                if (handler) handler(abus, dbus);
+            }
+            while (vol_gpio_get(PIN_E_CLOCK) != CENTIPEDE_INVERT_EQ) {
+                tight_loop_contents();
+            }
+        }
+    } else if (reading) {
+        if ((signals & NEG_CTS) == 0) {
+            // Bonobo: disk11_rom[abus & 0x1FFF] — direct table, no function pointer.
+            if (abus >= 0xD800u && abus <= 0xD881u && rom_read_handler) {
+                dbus = rom_read_handler(abus);
+            } else {
+                dbus = copico_xbios_bin[abus & 0x1FFFu];
+            }
+        } else {
+            dbus = coco_ram[abus];
+            if ((signals & NEG_SCS) == 0 && abus >= 0xFF00u) {
+                IoReadFunc handler = io_read_table[abus & 0xFFu];
+                if (handler) dbus = handler(abus);
+            }
+        }
+
+        gpio_set_dir_out_masked(0xFFu);
+        gpio_put_masked(0xFFu, dbus);
+        while (vol_gpio_get(PIN_E_CLOCK) != CENTIPEDE_INVERT_EQ) {
+            tight_loop_contents();
+        }
+        gpio_set_dir_in_masked(0xFFu);
+        rom_serve_count++;
+    } else {
+        while (vol_gpio_get(PIN_Q) != CENTIPEDE_INVERT_EQ) {
+            tight_loop_contents();
+        }
+        dbus = (uint8_t)(volatile_sio->gpio_in & 0xFFu);
+        coco_ram[abus] = dbus;
+
+        if ((signals & NEG_SCS) == 0) {
+            if (in_boot_menu() && abus >= 0xFF70u && abus <= 0xFF74u) {
+                boot_menu.set_config(abus, dbus);
+            } else if (in_boot_menu() && abus == 0xFF76u) {
+                boot_menu.set_flash_command(dbus);
+            } else if (abus == 0xFF7Fu) {
+                if (in_boot_menu() && dbus == 0x55u) {
+                    HatConfig cfg;
+                    boot_menu.get_config(&cfg);
+                    hat_config_save(cfg);
+                    apply_hat_config(cfg);
+                } else if (dbus == (uint8_t)MODE_BOOT_MENU) {
+                    enter_boot_menu();
+                }
+            } else if (abus >= 0xFF00u) {
+                IoWriteFunc handler = io_write_table[abus & 0xFFu];
+                if (handler) handler(abus, dbus);
+            }
+        }
+
+        while (vol_gpio_get(PIN_E_CLOCK) != CENTIPEDE_INVERT_EQ) {
+            tight_loop_contents();
+        }
+    }
+}
+
+static void init_centipede_control_pins() {
+    // Bonobo centipede-watcher: release open-collector cart control lines.
+    gpio_init(PIN_CART);
+    gpio_set_dir(PIN_CART, GPIO_OUT);
+    gpio_put(PIN_CART, 1);
+    init_open_collector_pin(PIN_SLENB);
+    init_open_collector_pin(PIN_HALT);
+    init_open_collector_pin(PIN_NMI);
+}
+
+static void init_coco_bus_gpio() {
+    // Bonobo InitializePins: tri-state the entire cart-side GPIO bank first.
+    for (uint i = 0; i <= 22; i++) {
+        gpio_init(i);
+        gpio_set_dir(i, GPIO_IN);
+        gpio_set_pulls(i, false, false);
+    }
+    for (uint i = 32; i <= 47; i++) {
+        gpio_init(i);
+        gpio_set_dir(i, GPIO_IN);
+        gpio_set_pulls(i, false, false);
+    }
+    init_centipede_control_pins();
+}
+
+static void init_hat_gpio() {
     pinMode(PIN_STATUS_LED, OUTPUT);
     digitalWrite(PIN_STATUS_LED, LOW);
-    delay(50); // Debounce settle
-    
-    // ================================================================
-    // Flash ROM Bank Init — Must happen before mode selection.
-    // Installs factory ROMs (Chameleon, FujiNet, RS-232, Disk BASIC)
-    // into flash on first boot. SDC-DOS is handled separately via SD.
-    // ================================================================
-    flash_rom.init_factory_defaults();
+    pinMode(PIN_BTN_DUAL, INPUT_PULLUP);
 
-    EEPROM.begin(512);
-    uint8_t saved_mode = EEPROM.read(0);
-    if (saved_mode >= MODE_MAX) saved_mode = (uint8_t)MODE_BOOT_MENU;
+    // Centipede 32z cartridge selects — must stay inputs in X-BIOS mode (not VGA outputs).
+    gpio_init(PIN_CTS);
+    gpio_init(PIN_SCS);
+    gpio_set_dir(PIN_CTS, GPIO_IN);
+    gpio_set_dir(PIN_SCS, GPIO_IN);
+    gpio_set_pulls(PIN_CTS, false, false);
+    gpio_set_pulls(PIN_SCS, false, false);
+}
 
-    // G19 held at power-on → force CoPico X-BIOS (Slot 0)
-    // This is the user's "panic button" to recover from any misconfiguration.
-    if (digitalRead(PIN_BTN_DUAL) == LOW) {
-        current_mode = MODE_BOOT_MENU;
-        Serial.println("[Boot] G19 held → forcing CoPico X-BIOS Menu");
-    } else if (flash_rom.status_flags & FLASH_STATUS_SDC_MISSING &&
-               saved_mode == MODE_COCOSDC) {
-        // SDC-DOS is not in flash and the user wants CoCoSDC mode.
-        // Boot to the CoPico X-BIOS Menu so it can display the setup message.
-        current_mode = MODE_BOOT_MENU;
-        Serial.println("[Boot] SDC-DOS missing → forcing CoPico X-BIOS for setup alert");
-    } else {
-        current_mode = (EmulatorMode)saved_mode;
-        Serial.print("[Boot] Restored mode: ");
-        Serial.println(current_mode);
+void enter_boot_menu() {
+    if (current_mode != MODE_BOOT_MENU) {
+        boot_log("[Boot] Entering CoPico X-BIOS menu");
+        esp32.send_command(CMD_RESET, nullptr, 0);
     }
-    
-    // 1. Initialize I2S DAC (PCM5102A)
-    i2s.setBCLK(I2S_BCK);
-    i2s.setDATA(I2S_DIN);
-    i2s.setBitsPerSample(16); // 16-bit frames
-    i2s.begin(44100);
+    current_mode = MODE_BOOT_MENU;
+    rebuild_io_tables_boot_menu();
+    boot_menu.init();
+    boot_log(rom_read_handler ? "[Boot] X-BIOS ROM handler armed"
+                                : "[Boot] ERROR: ROM handler missing");
+}
 
-    // 2. Load PIO Programs
+static void init_coco_bus_pio() {
+    if (pio_initialized) return;
+    init_coco_bus_gpio();
+
     uint offset_addr = pio_add_program(pio, &coco_sniffer_addr_program);
     uint offset_data = pio_add_program(pio, &coco_sniffer_data_program);
     uint offset_read = pio_add_program(pio, &coco_bus_read_program);
@@ -135,49 +343,110 @@ void setup() {
     sm_data = pio_claim_unused_sm(pio, true);
     sm_read = pio_claim_unused_sm(pio, true);
 
-    // 3. Configure SM_ADDR
     pio_sm_config c_addr = coco_sniffer_addr_program_get_default_config(offset_addr);
-    sm_config_set_in_pins(&c_addr, 32); // A0 is GPIO 32
+    sm_config_set_in_pins(&c_addr, 32);
     pio_sm_init(pio, sm_addr, offset_addr, &c_addr);
 
-    // 4. Configure SM_DATA
     pio_sm_config c_data = coco_sniffer_data_program_get_default_config(offset_data);
-    sm_config_set_in_pins(&c_data, 0);  // D0 is GPIO 0
+    sm_config_set_in_pins(&c_data, 0);
     pio_sm_init(pio, sm_data, offset_data, &c_data);
 
-    // 5. Configure SM_READ (PIO-Accelerated Read Response)
-    // Runs at full 150MHz (clkdiv=1) for minimum latency.
-    // out_base=0 (D0-D7), set_base=0 (for pindirs), out_shift_right=true
     pio_sm_config c_read = coco_bus_read_program_get_default_config(offset_read);
-    sm_config_set_out_pins(&c_read, 0, 8);   // Drive D0-D7 (GPIO 0-7)
-    sm_config_set_set_pins(&c_read, 0, 8);   // Set pindirs for D0-D7
-    sm_config_set_out_shift(&c_read, true, false, 8); // Shift right, no autopull
-    sm_config_set_clkdiv(&c_read, 1.0f);     // Full 150MHz — minimum latency
-    // Initialize GPIO 0-7 as PIO-controlled (but input until SM drives them)
+    sm_config_set_out_pins(&c_read, 0, 8);
+    sm_config_set_set_pins(&c_read, 0, 8);
+    sm_config_set_out_shift(&c_read, true, false, 8);
+    sm_config_set_clkdiv(&c_read, 1.0f);
     for (int i = 0; i < 8; i++) pio_gpio_init(pio, i);
-    pio_sm_set_consecutive_pindirs(pio, sm_read, 0, 8, false); // Start as inputs
+    for (int i = 32; i < 48; i++) pio_gpio_init(pio, i);
+    pio_sm_set_consecutive_pindirs(pio, sm_read, 0, 8, false);
     pio_sm_init(pio, sm_read, offset_read, &c_read);
-    pio_sm_set_enabled(pio, sm_read, true); // Start immediately — it idles on pull block
+    pio_sm_set_enabled(pio, sm_read, true);
 
-    // 6. Initialize GPIO for data bus (Pins 0-7 start as inputs)
-    gpio_init_mask(0xFF);
-    gpio_set_dir_in_masked(0xFF);
-
-    // 7. Start address and data sniffer state machines synchronously
     pio_enable_sm_mask_in_sync(pio, (1u << sm_addr) | (1u << sm_data));
+    pio_initialized = true;
+    pio_bus_armed = true;
+}
 
-    // 7. Initialize SpiStream for Coprocessor
+void apply_hat_config(const HatConfig& cfg) {
+    HatConfig c = cfg;
+    hat_config_apply_constraints(c);
+
+    if (current_mode != MODE_BOOT_MENU) {
+        esp32.send_command(CMD_RESET, nullptr, 0);
+    }
+
+    active_config = c;
+    current_mode = MODE_HAT_ACTIVE;
+
+    rebuild_io_tables_config(c);
+    hat_config_log(c, active_layers);
+
+    if (active_layers.internal_rom) {
+        Serial.println("[Config] Internal ROM — hat tri-stated");
+        return;
+    }
+
+    i2s.setBCLK(I2S_BCK);
+    i2s.setDATA(I2S_DIN);
+    i2s.setBitsPerSample(16);
+    i2s.begin(44100);
     spi_wimodem_stream.begin();
-    
-    // 8. Initialize RTC Emulation
     rtc.init();
 
-    // 9. Delegate initial peripheral setup
-    switch_mode(current_mode);
+    if (active_layers.cocosdc) cocosdc.init();
+    if (active_layers.wordpak) vga_driver.init();
+    if (active_layers.rs232) acia.init(false);
+    if (active_layers.wimodem) wimodem.init(true);
+    if (active_layers.fujinet) {
+        if (!flash_rom.load_rom_to_buffer(SLOT_FUJINET,
+                                          io_dispatch_fujinet_rom_buffer(),
+                                          nullptr, nullptr)) {
+            Serial.println("[Config] FujiNet ROM load failed");
+        }
+    }
+}
+
+static void init_hat_hardware() {
+    init_hat_gpio();
+    Serial.begin(115200);
+    boot_log("[Boot] CoPico RP2350 starting (RP2350B / Centipede 32z)");
+    boot_log("[Boot] init: EEPROM");
+    EEPROM.begin(512);
+    stage_blink(5);
+    boot_log("[Boot] X-BIOS ready — slow blink = alive");
+    hardware_init_done = true;
+}
+
+// Earliest hook Arduino calls on core0 — tri-state cart GPIO before USB/Serial init.
+void initVariant() {
+    init_coco_bus_gpio();
+}
+
+void setup() {
+    // CoCo bus is already live on core1 (setup1). Core0 only handles UI / hat init.
+    pinMode(CENTIPEDE_LED, OUTPUT);
+    digitalWrite(CENTIPEDE_LED, LOW);
+
+#ifdef PICO_DEFAULT_LED_PIN
+    pinMode(PICO_DEFAULT_LED_PIN, OUTPUT);
+#endif
 }
 
 void loop() {
-    // 1. Check Dual-Action Button
+    if (!hardware_init_done) {
+        init_hat_hardware();
+        stage_blink(6);
+        return;
+    }
+
+    if (flash_defaults_pending) {
+        // X-BIOS serves from embedded ROM; skip heavy flash writes at boot.
+        if (flash_rom.is_slot_empty(SLOT_COCOSDC)) {
+            flash_rom.status_flags |= FLASH_STATUS_SDC_MISSING;
+        }
+        flash_defaults_pending = false;
+    }
+
     if (digitalRead(PIN_BTN_DUAL) == LOW) {
         if (!btn_is_pressed) {
             btn_is_pressed = true;
@@ -185,16 +454,13 @@ void loop() {
             btn_warning_active = false;
         } else {
             uint32_t hold_time = millis() - btn_press_start;
-            
+
             if (hold_time >= 5000) {
-                // 5-Second Hold -> Reset to Boot Menu
                 digitalWrite(PIN_STATUS_LED, LOW);
-                btn_is_pressed = false; // Reset state before jumping
+                btn_is_pressed = false;
                 Serial.println("System Reset Triggered -> Returning to Boot Menu");
-                switch_mode(MODE_BOOT_MENU);
-            } 
-            else if (hold_time >= 3000) {
-                // 3-Second Warning -> Flash LED rapidly
+                enter_boot_menu();
+            } else if (hold_time >= 3000) {
                 digitalWrite(PIN_STATUS_LED, (millis() / 100) % 2);
                 btn_warning_active = true;
             }
@@ -203,152 +469,140 @@ void loop() {
         if (btn_is_pressed) {
             uint32_t hold_time = millis() - btn_press_start;
             btn_is_pressed = false;
-            
+
             if (btn_warning_active) {
-                // They let go after warning but before reset. Just turn off LED.
                 digitalWrite(PIN_STATUS_LED, LOW);
                 btn_warning_active = false;
-            } 
-            else if (hold_time < 1000 && current_mode == MODE_COCOSDC) {
-                // Short press -> Disk Swap
+            } else if (hold_time < 1000 && active_layers.cocosdc) {
                 Serial.println("Disk Swap Triggered");
                 esp32.sdc_swap();
             }
         }
     }
 
-    // Core 0 handles system tasks and Audio Generation / VGA Rendering
-    if (current_mode == MODE_SPEECH_SOUND) {
-        pic7040.tick();
-        
-        int16_t sample_l = 0, sample_r = 0;
-        pic7040.generate_audio(&sample_l, &sample_r);
-        
-        // Push to I2S DAC (blocks if buffer is full)
-        i2s.write(sample_l);
-        i2s.write(sample_r);
-    } else if (current_mode == MODE_WORDPAK2) {
-        vga_driver.tick();
-    } else if (current_mode == MODE_COCOSDC) {
-        cocosdc.tick();
-    } else if (current_mode == MODE_WIMODEM) {
-        spi_wimodem_stream.tick();
-    } else if (current_mode == MODE_BOOT_MENU) {
+    if (in_boot_menu()) {
         boot_menu.service_flash_command();
-        EmulatorMode pending_mode;
-        if (boot_menu.consume_pending_mode_switch(&pending_mode)) {
-            switch_mode(pending_mode);
+        HatConfig pending;
+        if (boot_menu.consume_pending_config_apply(&pending)) {
+            hat_config_save(pending);
+            apply_hat_config(pending);
         }
+
+        digitalWrite(PIN_STATUS_LED, (millis() / 500) % 2);
 #ifdef PICO_DEFAULT_LED_PIN
         digitalWrite(PICO_DEFAULT_LED_PIN, (millis() / 500) % 2);
 #endif
+        digitalWrite(CENTIPEDE_LED, (millis() / 500) % 2);
         delay(10);
-    } else {
+        return;
+    }
+
+    if (active_layers.speech) {
+        pic7040.tick();
+        int16_t sample_l = 0, sample_r = 0;
+        pic7040.generate_audio(&sample_l, &sample_r);
+        i2s.write(sample_l);
+        i2s.write(sample_r);
+    }
+
+    if (active_layers.wordpak) {
+        vga_driver.tick();
+    }
+
+    if (active_layers.cocosdc) {
+        cocosdc.tick();
+    }
+
+    if (active_layers.wimodem) {
+        spi_wimodem_stream.tick();
+    }
+
+    if (!active_layers.speech && !active_layers.wordpak &&
+        !active_layers.cocosdc && !active_layers.wimodem) {
         delay(1);
     }
 }
 
-// Core 1 loop - Dedicated to processing the CoCo bus
 void setup1() {
-    // Core 1 setup
+    // First instruction on core1: serve the CoCo bus (do not wait for core0 setup()).
+    init_coco_bus_gpio();
+    enter_boot_menu();
+    coco_bus_ready = true;
+    multicore_lockout_victim_init();
+
+    uint32_t ints = save_and_disable_interrupts();
+    while (in_boot_menu()) {
+        bonobo_sync_one_cycle();
+    }
+    restore_interrupts(ints);
 }
 
-// ---------------------------------------------------------------
-// BUS_RESPOND(byte): Fast PIO-based read response macro.
-// Hands the data byte to the coco_bus_read PIO state machine,
-// which drives GPIO 0-7, waits for E-clock fall, then tri-states.
-// ---------------------------------------------------------------
 #define BUS_RESPOND(byte) pio_sm_put_blocking(pio, sm_read, (uint32_t)(byte))
 
-// ================================================================
-// loop1(): Core 1 — Hybrid Fast-Map Bus Handler
-// ================================================================
-// TIMING CONTEXT (why this code is structured the way it is):
-//
-// The CoCo's 6809/6309 CPU reads data from the bus on the
-// falling edge of the E-clock. We must drive valid data onto
-// GPIO 0-7 BEFORE that edge arrives. Our timing budget:
-//
-//   Stock CoCo (1.0 MHz):  ~500 ns  — easy
-//   Turbo       (1.79 MHz): ~279 ns  — comfortable
-//   GIME-X      (2.86 MHz): ~175 ns  — our design target
-//
-// ARCHITECTURE:
-//   1. ROM Shadow ($C000-$DFFF): Checked via a single function
-//      pointer (rom_read_handler). One comparison + indirect call.
-//      Cost: ~20 ns.
-//
-//   2. I/O Space ($FF00-$FFFF): Indexed lookup into a 256-entry
-//      function pointer table (io_read_table / io_write_table).
-//      Eliminates the old if/else chain entirely.
-//      Cost: ~7 ns (array index + null check + indirect call).
-//
-//   3. Special writes ($FF70-$FF73 boot config, $FF7F mode switch):
-//      Handled inline before the table lookup because they trigger
-//      system-level actions (EEPROM write, mode switch) that must
-//      not be deferred to a handler function.
-//
-// ESTIMATED TOTAL LATENCY: ~120 ns worst-case
-// MARGIN AT 2.86 MHz:      ~55 ns (comfortable)
-// ================================================================
-
 void loop1() {
-    // Tight poll: bail immediately if no bus cycle to process
-    if (pio_sm_is_rx_fifo_empty(pio, sm_addr) || pio_sm_is_rx_fifo_empty(pio, sm_data)) return;
+    if (in_boot_menu()) return;
+
+    if (!pio_initialized) {
+        init_coco_bus_pio();
+    }
+    rearm_pio_bus();
+
+    if (pio_sm_is_rx_fifo_empty(pio, sm_addr)) return;
 
     uint32_t addr = pio_sm_get(pio, sm_addr);
-    uint32_t data = pio_sm_get(pio, sm_data);
     bool is_read = gpio_get(PIN_RW);
 
     if (is_read) {
-        // --- READ CYCLE (fast path) ---
+        if (!pio_sm_is_rx_fifo_empty(pio, sm_data)) {
+            (void)pio_sm_get(pio, sm_data);
+        }
+    } else {
+        if (pio_sm_is_rx_fifo_empty(pio, sm_data)) return;
+    }
 
-        // Path A: ROM shadow ($C000-$DFFF) — single pointer check
-        if (addr >= 0xC000 && addr <= 0xDFFF) {
-            if (rom_read_handler) {
-                BUS_RESPOND(rom_read_handler(addr));
-            }
+    uint32_t data = is_read ? 0 : pio_sm_get(pio, sm_data);
+    bool cts_active = (gpio_get(PIN_CTS) == 0);
+    bool scs_active = (gpio_get(PIN_SCS) == 0);
+
+    if (is_read) {
+        if (cart_rom_selected((uint16_t)addr) && rom_read_handler && cts_active) {
+            BUS_RESPOND(rom_read_handler((uint16_t)addr));
+            rom_serve_count++;
             return;
         }
 
-        // Path B: I/O space ($FF00-$FFFF) — table lookup
         if (addr >= 0xFF00) {
+            if (!scs_active) return;
             IoReadFunc handler = io_read_table[addr & 0xFF];
             if (handler) {
                 BUS_RESPOND(handler(addr));
             }
-            // If handler is NULL, no device here — open bus.
         }
     } else {
-        // --- WRITE CYCLE ---
-
-        // Special: Boot Menu config registers (system-level, inline)
-        if (current_mode == MODE_BOOT_MENU && addr >= 0xFF70 && addr <= 0xFF73) {
+        if (in_boot_menu() && scs_active && addr >= 0xFF70 && addr <= 0xFF74) {
             boot_menu.set_config(addr, (uint8_t)data);
             return;
         }
 
-        // Flash ROM utility command ($FF76) from CoPico X-BIOS options menu
-        if (current_mode == MODE_BOOT_MENU && addr == 0xFF76) {
+        if (in_boot_menu() && scs_active && addr == 0xFF76) {
             boot_menu.set_flash_command((uint8_t)data);
             return;
         }
 
-        // Special: Mode switch register (system-level, inline)
-        if (addr == 0xFF7F) {
-            if (current_mode == MODE_BOOT_MENU && data == 0x55) {
-                EmulatorMode new_mode = boot_menu.calculate_mode();
-                EEPROM.write(0, (uint8_t)new_mode);
-                EEPROM.commit();
-                switch_mode(new_mode);
-            } else {
-                switch_mode((EmulatorMode)data);
+        if (scs_active && addr == 0xFF7F) {
+            if (in_boot_menu() && data == 0x55) {
+                HatConfig cfg;
+                boot_menu.get_config(&cfg);
+                hat_config_save(cfg);
+                apply_hat_config(cfg);
+            } else if (data == (uint8_t)MODE_BOOT_MENU) {
+                enter_boot_menu();
             }
             return;
         }
 
-        // Normal I/O write — table lookup
         if (addr >= 0xFF00) {
+            if (!scs_active) return;
             IoWriteFunc handler = io_write_table[addr & 0xFF];
             if (handler) {
                 handler(addr, (uint8_t)data);
@@ -358,70 +612,8 @@ void loop1() {
 }
 
 void update_orch90_audio() {
-    // Convert 8-bit unsigned/signed to 16-bit I2S frame
     int16_t sample_l = ((int16_t)dac_left - 128) << 8;
     int16_t sample_r = ((int16_t)dac_right - 128) << 8;
-    
-    // Push to I2S DAC
     i2s.write(sample_l);
     i2s.write(sample_r);
-}
-
-void switch_mode(EmulatorMode new_mode) {
-    if (current_mode == new_mode) return;
-    
-    Serial.print("Switching mode from ");
-    Serial.print(current_mode);
-    Serial.print(" to ");
-    Serial.println(new_mode);
-    
-    // 1. Cleanup old mode
-    // Send soft-reset to ESP32 to clear any active connections or buffers
-    esp32.send_command(CMD_RESET, nullptr, 0);
-    
-    current_mode = new_mode;
-    
-    // Rebuild the I/O dispatch tables for the new mode.
-    // This remaps the 256-entry function pointer tables so loop1()
-    // routes bus reads/writes to the correct emulator handlers.
-    rebuild_io_tables(new_mode);
-    
-    // 2. Initialize new mode
-    switch (current_mode) {
-        case MODE_BOOT_MENU:
-            boot_menu.init();
-            break;
-        case MODE_RS232_PAK_LEGACY:
-            acia.init(false);
-            break;
-        case MODE_RS232_PAK_TURBO:
-            acia.init(true);
-            break;
-        case MODE_WORDPAK2:
-            vga_driver.init();
-            break;
-        case MODE_COCOSDC:
-            cocosdc.init();
-            break;
-        case MODE_FUJINET:
-            // Load FujiNet BIOS (Slot 2) from flash into shadow RAM.
-            // The io_dispatch read handler will serve it to the CoCo bus.
-            flash_rom.load_rom_to_buffer(SLOT_FUJINET,
-                                         io_dispatch_get_shadow_buffer(),
-                                         nullptr, nullptr);
-            break;
-        case MODE_WIMODEM:
-            wimodem.init(true); // Always turbo mode for wimodem
-            break;
-        case MODE_INTERNAL_ROM:
-            // Hat goes fully silent — all data bus pins go tri-state.
-            // The CoCo boots using its own internal Color BASIC ROMs.
-            // io_dispatch handles this by simply not asserting /OE.
-            Serial.println("[Mode] Internal ROM — Hat tri-stated");
-            break;
-        case MODE_ORCH90:
-        case MODE_SPEECH_SOUND:
-            // No specific init required
-            break;
-    }
 }

@@ -78,3 +78,39 @@ static inline pio_sm_config coco_sniffer_data_program_get_default_config(uint of
 }
 #endif
 
+// ------------- //
+// coco_bus_read //
+// ------------- //
+
+#define coco_bus_read_wrap_target 0
+#define coco_bus_read_wrap 4
+#define coco_bus_read_pio_version 0
+
+static const uint16_t coco_bus_read_program_instructions[] = {
+            //     .wrap_target
+    0x80a0, //  0: pull   block
+    0x6088, //  1: out    pindirs, 8
+    0x6008, //  2: out    pins, 8
+    0x2015, //  3: wait   0 gpio, 21
+    0xe080, //  4: set    pindirs, 0
+            //     .wrap
+};
+
+#if !PICO_NO_HARDWARE
+static const struct pio_program coco_bus_read_program = {
+    .instructions = coco_bus_read_program_instructions,
+    .length = 5,
+    .origin = -1,
+    .pio_version = coco_bus_read_pio_version,
+#if PICO_PIO_VERSION > 0
+    .used_gpio_ranges = 0x2
+#endif
+};
+
+static inline pio_sm_config coco_bus_read_program_get_default_config(uint offset) {
+    pio_sm_config c = pio_get_default_sm_config();
+    sm_config_set_wrap(&c, offset + coco_bus_read_wrap_target, offset + coco_bus_read_wrap);
+    return c;
+}
+#endif
+

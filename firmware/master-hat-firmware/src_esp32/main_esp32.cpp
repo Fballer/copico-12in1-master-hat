@@ -4,6 +4,7 @@
 #include "spi_protocol.h"
 #include "ModemEngine.h"
 #include "SdFat.h"
+#include "sdios.h"
 #include <time.h>
 #include <WiFi.h>
 
@@ -23,7 +24,7 @@
 
 SoftSpiDriver<SD_MISO, SD_MOSI, SD_SCK> softSpi;
 SdFat sd;
-File drives[2];
+FsFile drives[2];
 
 // Buffers for SPI DMA (Must be DMA-capable memory)
 WORD_ALIGNED_ATTR SpiMasterPacket rx_packet;
@@ -212,7 +213,7 @@ void process_spi_transaction() {
 
                     rom_fetch_size = 0;
                     if (sd.exists(filename)) {
-                        File rom_file = sd.open(filename, O_RDONLY);
+                        FsFile rom_file = sd.open(filename, O_RDONLY);
                         if (rom_file) {
                             rom_fetch_size = (uint16_t)rom_file.size();
                             if (rom_fetch_size > sizeof(rom_fetch_buf)) {

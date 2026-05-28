@@ -91,18 +91,36 @@ INPUT_LOOP:
 DO_AUDIO:   LDA     VAR_AUDIO
             INCA
             CMPA    #3
-            BNE     DA_SAVE
+            BNE     DA_W0
             CLRA
-DA_SAVE:    STA     VAR_AUDIO
-            LBRA    MAIN_LOOP
+DA_W0:      STA     VAR_AUDIO
+            * Orch90 ($FF7A/B) conflicts with WordPak V9958 on same ports — skip it
+            LDA     VAR_VIDEO
+            CMPA    #0
+            BNE     DA_DONE
+            LDA     VAR_AUDIO
+            CMPA    #1
+            BNE     DA_DONE
+            LDA     #2
+            STA     VAR_AUDIO
+DA_DONE:    LBRA    MAIN_LOOP
 
 DO_VIDEO:   LDA     VAR_VIDEO
             INCA
             CMPA    #3
-            BNE     DV_SAVE
+            BNE     DV_W0
             CLRA
-DV_SAVE:    STA     VAR_VIDEO
-            LBRA    MAIN_LOOP
+DV_W0:      STA     VAR_VIDEO
+            * Selecting WordPak auto-disables Orch90 (shared $FF7A/$FF7B)
+            LDA     VAR_VIDEO
+            CMPA    #0
+            BNE     DV_DONE
+            LDA     VAR_AUDIO
+            CMPA    #1
+            BNE     DV_DONE
+            LDA     #2
+            STA     VAR_AUDIO
+DV_DONE:    LBRA    MAIN_LOOP
 
 DO_DISK:    LDA     VAR_DISK
             INCA
@@ -1983,6 +2001,4 @@ STR_TZ_PROMPT FCC   "         SELECT 1-6 OR         "
 STR_SAVING  FCC     "  *** SAVING CONFIGURATION ***  "
             FCB     0
 
-            ORG     $DFFF
-            FCB     $FF
             END     START

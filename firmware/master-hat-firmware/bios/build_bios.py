@@ -72,7 +72,14 @@ def build():
         sys.exit(1)
 
     # Pad to exactly 8KB with $FF (erased EPROM value)
-    binary_data = binary_data + b"\xFF" * (ROM_SIZE - size)
+    binary_data = bytearray(binary_data + b"\xFF" * (ROM_SIZE - len(binary_data)))
+
+    # CoCo maps CPU $FFFE-$FFFF to the last two bytes of the 8K ROM image.
+    # Mirror the Disk-BASIC-style entry vector at $C002 into that slot.
+    if len(binary_data) >= 4:
+        binary_data[0x1FFE] = binary_data[2]
+        binary_data[0x1FFF] = binary_data[3]
+    binary_data = bytes(binary_data)
     size = ROM_SIZE
     print(f"Binary size (padded):  {size} bytes")
 
